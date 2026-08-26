@@ -5,6 +5,7 @@ Requires=pipewire.service pipewire-pulse.service
 
 [Service]
 Type=simple
+Environment=MIC_GAIN=3
 ExecStart=/home/radxa/audio-split-test.sh
 KillSignal=SIGINT
 TimeoutStopSec=15

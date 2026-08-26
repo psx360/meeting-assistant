@@ -102,6 +102,8 @@ journalctl -f -u recorder-controller -u oled-dashboard
 
 Ожидаемый источник: `alsa_input.platform-inmp441-sound.stereo-fallback`, OLED — `0x3c`.
 
+Коэффициент программного усиления принудительно задаётся как `MIC_GAIN=3` в `audio-recorder.service` и `oled-dashboard.service`. Поэтому после перезагрузки плата и индикатор уровня снова используют усиление ×3.
+
 ## Восстановление VPS
 
 ```bash
@@ -168,4 +170,3 @@ journalctl -f -u meeting-assistant -u meeting-worker
 - `/var/lib/meeting-assistant/meeting-assistant.sqlite3`;
 - `/home/radxa/.config/meeting-upload.env`;
 - при необходимости каталоги `completed/` и записи на Radxa.
-

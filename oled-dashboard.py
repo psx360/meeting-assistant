@@ -3,6 +3,7 @@ import array, fcntl, glob, json, math, os, signal, subprocess, threading, time
 import gpiod
 I2C_DEV="/dev/i2c-0"; I2C_ADDR=0x3C; STATE_FILE="/run/ai-recorder-state"; LEVEL_FILE="/run/ai-recorder-audio-level"
 SOURCE="alsa_input.platform-inmp441-sound.stereo-fallback"
+MIC_GAIN=float(os.environ.get("MIC_GAIN","3"))
 SETTINGS_FILE="/var/lib/meeting-recorder/settings.json"
 FONT={
 " ":[0,0,0,0,0],"-":[8,8,8,8,8],".":[0,0,0,96,96],":":[0,54,54,0,0],"/":[64,32,16,8,4],"!":[0,0,95,0,0],"?":[2,1,81,9,6],
@@ -57,7 +58,7 @@ class Meter:
  def _run(self):
   env=os.environ.copy(); env.update(XDG_RUNTIME_DIR="/run/user/1000",DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus")
   try:
-   self.proc=subprocess.Popen(["runuser","-u","radxa","--","ffmpeg","-nostdin","-hide_banner","-loglevel","error","-f","pulse","-i",SOURCE,"-af","volume=3","-ac","1","-ar","8000","-f","s16le","pipe:1"],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env)
+   self.proc=subprocess.Popen(["runuser","-u","radxa","--","ffmpeg","-nostdin","-hide_banner","-loglevel","error","-f","pulse","-i",SOURCE,"-af",f"volume={MIC_GAIN:g}","-ac","1","-ar","8000","-f","s16le","pipe:1"],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env)
    while self.running:
     raw=self.proc.stdout.read(1600)
     if not raw:break

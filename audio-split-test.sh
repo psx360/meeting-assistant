@@ -1,12 +1,13 @@
 #!/bin/bash
 set -o pipefail
 
+mic_gain="${MIC_GAIN:-3}"
 output_dir="$HOME/audio-split-test/$(date +%Y-%m-%d_%H-%M-%S)"
 mkdir -p "$output_dir"
 touch "$output_dir/.recording"
 trap 'rm -f "$output_dir/.recording"; touch "$output_dir/.ready"' EXIT
 
-echo "AUDIO_TEST_START output=$output_dir gain=3x min_part=180s max_part=600s silence=1.2s detect=-40dB detect_delay=1.2s split=0.05% post_compand=on ceiling=-1dB"
+echo "AUDIO_TEST_START output=$output_dir gain=${mic_gain}x min_part=180s max_part=600s silence=1.2s detect=-40dB detect_delay=1.2s split=0.05% post_compand=on ceiling=-1dB"
 
 ffmpeg \
   -nostdin \
@@ -15,7 +16,7 @@ ffmpeg \
   -loglevel info \
   -f pulse \
   -i alsa_input.platform-inmp441-sound.stereo-fallback \
-  -af "volume=3,silencedetect=noise=-40dB:d=1.2" \
+  -af "volume=${mic_gain},silencedetect=noise=-40dB:d=1.2" \
   -f s16le \
   -ar 48000 \
   -ac 2 \
