@@ -3,7 +3,7 @@ import array, fcntl, glob, json, math, os, signal, subprocess, threading, time
 import gpiod
 I2C_DEV="/dev/i2c-0"; I2C_ADDR=0x3C; STATE_FILE="/run/ai-recorder-state"; LEVEL_FILE="/run/ai-recorder-audio-level"
 SOURCE="alsa_input.platform-inmp441-sound.stereo-fallback"
-MIC_GAIN=float(os.environ.get("MIC_GAIN","3"))
+DEFAULT_MIC_GAIN=float(os.environ.get("MIC_GAIN","4"))
 SETTINGS_FILE="/var/lib/meeting-recorder/settings.json"
 FONT={
 " ":[0,0,0,0,0],"-":[8,8,8,8,8],".":[0,0,0,96,96],":":[0,54,54,0,0],"/":[64,32,16,8,4],"!":[0,0,95,0,0],"?":[2,1,81,9,6],
@@ -46,9 +46,10 @@ class Display:
    self.cmd(0xB0+p,2,0x10); row=self.buf[p*128:(p+1)*128]
    for i in range(0,128,16): os.write(self.fd,bytes([0x40])+row[i:i+16])
 class Meter:
- def __init__(self): self.db=-90.; self.running=False; self.proc=None; self.lock=threading.Lock()
- def start(self):
-  if not self.running: self.running=True; threading.Thread(target=self._run,daemon=True).start()
+ def __init__(self): self.db=-90.; self.running=False; self.proc=None; self.lock=threading.Lock();self.gain=DEFAULT_MIC_GAIN
+ def start(self,gain):
+  self.gain=gain
+  if not self.running:self.running=True;threading.Thread(target=self._run,daemon=True).start()
  def stop(self):
   self.running=False
   if self.proc:
@@ -58,7 +59,7 @@ class Meter:
  def _run(self):
   env=os.environ.copy(); env.update(XDG_RUNTIME_DIR="/run/user/1000",DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus")
   try:
-   self.proc=subprocess.Popen(["runuser","-u","radxa","--","ffmpeg","-nostdin","-hide_banner","-loglevel","error","-f","pulse","-i",SOURCE,"-af",f"volume={MIC_GAIN:g}","-ac","1","-ar","8000","-f","s16le","pipe:1"],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env)
+   self.proc=subprocess.Popen(["runuser","-u","radxa","--","ffmpeg","-nostdin","-hide_banner","-loglevel","error","-f","pulse","-i",SOURCE,"-af",f"volume={self.gain:g}","-ac","1","-ar","8000","-f","s16le","pipe:1"],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env)
    while self.running:
     raw=self.proc.stdout.read(1600)
     if not raw:break
@@ -116,14 +117,14 @@ def upload_pending():
 def disk_ok():
  try:s=os.statvfs("/home/radxa");return s.f_bavail*s.f_frsize>1024**3
  except OSError:return False
-def thresholds():
+def audio_settings():
  try:
   with open(SETTINGS_FILE,encoding="utf-8") as f:data=json.load(f)
-  return float(data.get("speech_db",-38)),float(data.get("silence_db",-42))
- except (OSError,ValueError,TypeError):return -38.,-42.
+  return float(data.get("gain",DEFAULT_MIC_GAIN)),float(data.get("speech_db",-38)),float(data.get("silence_db",-42))
+ except (OSError,ValueError,TypeError):return DEFAULT_MIC_GAIN,-38.,-42.
 def duration(s):return f"{int(s)//3600:02}:{(int(s)//60)%60:02}:{int(s)%60:02}"
 def main():
- d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;speech_db,silence_db=thresholds()
+ d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;mic_gain,speech_db,silence_db=audio_settings()
  def stop(*_):
   nonlocal alive;alive=False
  signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
@@ -137,8 +138,11 @@ def main():
    else:
     inactive_checks+=1
     if inactive_checks>=5:active=False
-   upload=user_active("meeting-upload.service");pending=upload_pending();bt_active=system_active("bt-pairing-mode.service");wifi=wifi_ok();speech_db,silence_db=thresholds();last=now
-   if (active or bt_active) and not m.running:m.start()
+   upload=user_active("meeting-upload.service");pending=upload_pending();bt_active=system_active("bt-pairing-mode.service");wifi=wifi_ok();new_gain,speech_db,silence_db=audio_settings();last=now
+   if new_gain!=mic_gain:
+    mic_gain=new_gain
+    if m.running:m.stop()
+   if (active or bt_active) and not m.running:m.start(mic_gain)
    if not (active or bt_active) and m.running:m.stop()
    if active and not started:started=now
    if not active and inactive_checks>=5:started=0;silence=None;speech=False;hist=[0]*20

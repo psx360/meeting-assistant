@@ -37,6 +37,8 @@
   </section>
   <section class="card">
     <h2>Чувствительность к речи</h2>
+    <div class="field"><label for="gain">Усиление микрофона</label><input id="gain" type="number" min="1" max="8" step="0.5" value="4"></div>
+    <div class="buttons"><button id="saveGain" disabled>Сохранить усиление</button></div>
     <div class="row"><div class="field"><label>Шум комнаты, dB</label><input id="noise" readonly placeholder="—"></div><div class="field"><label>Порог речи, dB</label><input id="speech" readonly placeholder="—"></div></div>
     <div class="field"><label for="silence">Порог тишины, dB</label><input id="silence" type="number" min="-90" max="-5" step="0.5" value="-42"></div>
     <div class="buttons"><button id="measure" class="warn" disabled>Измерить шум 10 секунд</button><button id="applySuggested" class="secondary" disabled>Применить измеренное</button><button id="saveThreshold" disabled>Сохранить порог</button></div>
@@ -48,9 +50,10 @@
 const SERVICE='7d7a0000-3e6b-4f4b-9a5a-8f9c4a1e0000', RX='7d7a0001-3e6b-4f4b-9a5a-8f9c4a1e0000', TX='7d7a0002-3e6b-4f4b-9a5a-8f9c4a1e0000';
 let device,rx,tx,lastSuggestion=false;const $=id=>document.getElementById(id),enc=new TextEncoder(),dec=new TextDecoder('utf-8');
 function status(text,type=''){const e=$('status');e.textContent=text;e.className='status '+type}
-function enabled(on){for(const id of ['scan','connectWifi','measure','saveThreshold'])$(id).disabled=!on;$('disconnectBt').disabled=!on;$('connectBt').disabled=on}
+function enabled(on){for(const id of ['scan','connectWifi','saveGain','measure','saveThreshold'])$(id).disabled=!on;$('disconnectBt').disabled=!on;$('connectBt').disabled=on}
 function btState(on){$('btState').className=on?'connected':'';$('btState').innerHTML='<span class="dot"></span>'+(on?'Meeting Assistant подключён':'Bluetooth не подключён');enabled(on)}
 function parse(text){status(text,text.startsWith('ОШИБКА')?'err':'ok');
+ const gain=text.match(/УСИЛЕНИЕ=([\d.]+)/);if(gain)$('gain').value=gain[1];
  const current=text.match(/SSID=([^;]*);ПАРОЛЬ=([^;]*)/);if(current){if(current[1]&&current[1]!=='-')$('ssid').value=current[1];$('password').value='';$('password').placeholder=current[2]==='СОХРАНЕН'?'Пароль сохранён — оставьте пустым':'Введите пароль Wi‑Fi'}
  if(text.startsWith('СЕТИ=')){const list=text.slice(5).split(';').filter(Boolean);$('networks').innerHTML='';$('networkList').innerHTML='';list.forEach(n=>{const o=document.createElement('option');o.value=n;$('networks').appendChild(o);const b=document.createElement('button');b.type='button';b.textContent=n;b.onclick=()=>{$('ssid').value=n;status('Выбрана сеть: '+n,'ok')};$('networkList').appendChild(b)})}
  if(text.startsWith('ВЫБРАНО='))$('match').textContent=text.replaceAll(';',' · ');
@@ -75,6 +78,7 @@ $('scan').onclick=()=>send('SCAN').catch(e=>status(e.message,'err'));
 $('connectWifi').onclick=async()=>{try{const ssid=$('ssid').value.trim(),pass=$('password').value,open=$('openNetwork').checked;if(!ssid)throw Error('Введите название сети');await send('SSID='+ssid);await send('OPEN='+(open?'1':'0'));if(!open&&pass)await send('PASS='+pass);$('password').value='';await send('CONNECT')}catch(e){status(e.message,'err')}};
 $('openNetwork').onchange=()=>{$('password').disabled=$('openNetwork').checked;if($('openNetwork').checked)$('password').value=''};
 $('measure').onclick=()=>{lastSuggestion=false;$('applySuggested').disabled=true;send('MEASURE').catch(e=>status(e.message,'err'))};
+$('saveGain').onclick=()=>send('GAIN='+$('gain').value).catch(e=>status(e.message,'err'));
 $('applySuggested').onclick=async()=>{try{if(!lastSuggestion)throw Error('Сначала измерьте шум');await send('APPLY')}catch(e){status(e.message,'err')}};
 $('saveThreshold').onclick=()=>send('THRESHOLD='+$('silence').value).catch(e=>status(e.message,'err'));
 $('silence').oninput=()=>{$('speech').value=(Number($('silence').value)+4).toFixed(1)};

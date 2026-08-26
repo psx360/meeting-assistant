@@ -1,7 +1,11 @@
 #!/bin/bash
 set -o pipefail
 
-mic_gain="${MIC_GAIN:-3}"
+mic_gain="${MIC_GAIN:-4}"
+if [[ -r /var/lib/meeting-recorder/settings.json ]]; then
+  saved_gain="$(python3 -c 'import json; print(json.load(open("/var/lib/meeting-recorder/settings.json"))["gain"])' 2>/dev/null || true)"
+  [[ "$saved_gain" =~ ^[0-9]+([.][0-9]+)?$ ]] && mic_gain="$saved_gain"
+fi
 output_dir="$HOME/audio-split-test/$(date +%Y-%m-%d_%H-%M-%S)"
 mkdir -p "$output_dir"
 touch "$output_dir/.recording"

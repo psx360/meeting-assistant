@@ -19,7 +19,7 @@ LEVEL_FILE=Path("/run/ai-recorder-audio-level")
 logging.basicConfig(level=logging.INFO,format="%(message)s");log=logging.getLogger("bt-wifi-gatt")
 
 def normalize(value):return "".join(c for c in unicodedata.normalize("NFKC",value).casefold() if c.isalnum())
-def defaults():return {"gain":3.0,"speech_db":-38.0,"silence_db":-42.0,"silence_delay":1.2,"noise_db":-46.0}
+def defaults():return {"gain":4.0,"speech_db":-38.0,"silence_db":-42.0,"silence_delay":1.2,"noise_db":-46.0}
 def load_settings():
  data=defaults()
  try:data.update(json.loads(SETTINGS.read_text(encoding="utf-8")))
@@ -29,7 +29,7 @@ def save_settings(data):
  SETTINGS.parent.mkdir(parents=True,exist_ok=True);fd,name=tempfile.mkstemp(dir=SETTINGS.parent,prefix="settings-",text=True)
  try:
   with os.fdopen(fd,"w",encoding="utf-8") as f:json.dump(data,f,ensure_ascii=False);f.write("\n")
-  os.chmod(name,0o600);os.replace(name,SETTINGS)
+  os.chmod(name,0o644);os.replace(name,SETTINGS)
  finally:
   if os.path.exists(name):os.unlink(name)
 
@@ -121,7 +121,7 @@ class Handler:
  def command(self,text):
   cmd=text.strip();upper=cmd.upper();log.info("BT_COMMAND type=%s","PASS" if upper.startswith("PASS=") else upper.split("=",1)[0][:20])
   try:
-   if upper=="HELP":self.tx.send("SCAN | SSID=имя | PASS=пароль | CONNECT | MEASURE | APPLY | THRESHOLD=-42 | STATUS")
+   if upper=="HELP":self.tx.send("SCAN | SSID=имя | PASS=пароль | CONNECT | GAIN=4 | MEASURE | APPLY | THRESHOLD=-42 | STATUS")
    elif upper=="SCAN":
     nets=self.networks();self.tx.send("СЕТИ="+";".join(sorted(nets,key=nets.get,reverse=True)[:8]))
    elif upper.startswith("SSID="):
@@ -134,6 +134,10 @@ class Handler:
    elif upper=="APPLY":
     if not self.suggestion:raise RuntimeError("СНАЧАЛА MEASURE")
     data=load_settings();data.update(self.suggestion);save_settings(data);self.tx.send("ПОРОГИ=СОХРАНЕНЫ")
+   elif upper.startswith("GAIN="):
+    gain=float(cmd.split("=",1)[1])
+    if not 1.0<=gain<=8.0:raise RuntimeError("УСИЛЕНИЕ ДОЛЖНО БЫТЬ ОТ 1 ДО 8")
+    data=load_settings();data["gain"]=gain;save_settings(data);self.tx.send(f"УСИЛЕНИЕ={gain:g}")
    elif upper.startswith("THRESHOLD="):
     silence=float(cmd.split("=",1)[1]);data=load_settings();data.update(silence_db=silence,speech_db=silence+4);save_settings(data);self.tx.send(f"ТИШИНА={silence}DB;РЕЧЬ={silence+4}DB")
    elif upper=="STATUS":

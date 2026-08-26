@@ -14,6 +14,8 @@ id meetingassistant >/dev/null 2>&1 || useradd --system --gid meetingassistant -
 install -d -o meetingassistant -g meetingassistant -m 0750 /var/lib/meeting-assistant /opt/meeting-assistant
 install -o root -g meetingassistant -m 0750 "$repo/meeting-assistant-server.py" /opt/meeting-assistant/server.py
 install -o root -g meetingassistant -m 0750 "$repo/meeting-worker.py" /opt/meeting-assistant/worker.py
+install -d -o root -g root -m 0755 /var/www/meeting-setup
+install -o root -g root -m 0644 "$repo/bluefy-setup.html" /var/www/meeting-setup/index.html
 install -o root -g root -m 0644 "$repo/meeting-assistant.service" /etc/systemd/system/
 install -o root -g root -m 0644 "$repo/meeting-worker.service" /etc/systemd/system/
 
@@ -30,4 +32,3 @@ nginx -t
 systemctl daemon-reload
 systemctl enable --now meeting-assistant.service meeting-worker.service nginx.service
 echo "VPS installation complete. Configure DNS/TLS and webhooks as described in README.md."
-
