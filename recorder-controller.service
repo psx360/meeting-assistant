@@ -1,0 +1,15 @@
+[Unit]
+Description=AI recorder GPIO button controller
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/recorder-controller.py
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=recorder-controller
+
+[Install]
+WantedBy=multi-user.target

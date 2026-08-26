@@ -1,0 +1,16 @@
+[Unit]
+Description=Automatic Wi-Fi reconnect watchdog
+After=NetworkManager.service
+Requires=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/wifi-watchdog.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wifi-watchdog
+
+[Install]
+WantedBy=multi-user.target

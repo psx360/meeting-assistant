@@ -1,0 +1,12 @@
+[Unit]
+Description=Meeting Recorder Bluetooth pairing mode
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/bt-pairing-mode.sh
+TimeoutStopSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bt-pairing

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.key
+*.env
+!.env.example
+*.sqlite3*
+*.log
+audio-split-test/
+transcription-comparison/
+.cache/
+.idea/
+.vscode/

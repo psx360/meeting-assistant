@@ -1,0 +1,22 @@
+[Unit]
+Description=Meeting audio transcription, diarization and protocol worker
+After=network-online.target meeting-assistant.service
+Wants=network-online.target
+Requires=meeting-assistant.service
+
+[Service]
+Type=simple
+User=meetingassistant
+Group=meetingassistant
+EnvironmentFile=/etc/meeting-assistant.env
+ExecStart=/usr/bin/python3 /opt/meeting-assistant/worker.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/meeting-assistant
+
+[Install]
+WantedBy=multi-user.target

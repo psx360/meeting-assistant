@@ -1,0 +1,21 @@
+[Unit]
+Description=Meeting assistant Telegram and VK callback service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=meetingassistant
+Group=meetingassistant
+EnvironmentFile=-/etc/meeting-assistant.env
+ExecStart=/usr/bin/python3 /opt/meeting-assistant/server.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/meeting-assistant
+
+[Install]
+WantedBy=multi-user.target

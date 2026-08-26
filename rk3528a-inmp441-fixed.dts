@@ -1,0 +1,54 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "radxa,rock-2f", "rockchip,rk3528a";
+
+    metadata {
+        title = "Enable stereo INMP441 microphones on SAI0-M1";
+        compatible = "radxa,rock-2f";
+        category = "audio";
+        exclusive = "sai0", "i2s0m1-sclk", "i2s0m1-lrck", "i2s0m1-sdi";
+        description = "Enable a stereo pair of INMP441 I2S microphones on the RK3528A SAI0-M1 receive interface (shared physical pins 12, 35 and 38; L/R tied low for left and high for right).";
+    };
+
+    fragment@0 {
+        target = <&sai0>;
+        __overlay__ {
+            status = "okay";
+            #sound-dai-cells = <0>;
+            assigned-clocks = <&cru 0xaf>;
+            assigned-clock-rates = <12288000>;
+            pinctrl-names = "default";
+            pinctrl-0 = <&i2s0m1_sclk &i2s0m1_lrck &i2s0m1_sdi>;
+        };
+    };
+
+    fragment@1 {
+        target-path = "/";
+        __overlay__ {
+            inmp441_codec: inmp441-codec {
+                compatible = "rockchip,dummy-codec";
+                #sound-dai-cells = <0>;
+                status = "okay";
+            };
+
+            inmp441_sound: inmp441-sound {
+                compatible = "simple-audio-card";
+                simple-audio-card,name = "INMP441-Stereo";
+                simple-audio-card,format = "i2s";
+                simple-audio-card,bitclock-master = <&inmp441_cpu>;
+                simple-audio-card,frame-master = <&inmp441_cpu>;
+                status = "okay";
+
+                inmp441_cpu: simple-audio-card,cpu {
+                    sound-dai = <&sai0>;
+                };
+
+                simple-audio-card,codec {
+                    sound-dai = <&inmp441_codec>;
+                };
+            };
+        };
+    };
+};

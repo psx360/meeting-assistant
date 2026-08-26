@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#152235">
+  <title>Meeting Assistant — настройка</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#162033;background:#eef2f7}
+    *{box-sizing:border-box}body{margin:0;padding:18px 14px 40px}main{max-width:620px;margin:auto}
+    h1{font-size:25px;margin:6px 0}.sub{color:#64748b;margin:0 0 18px}.card{background:white;border-radius:16px;padding:17px;margin:13px 0;box-shadow:0 5px 20px #26364d18}
+    h2{font-size:18px;margin:0 0 14px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{margin:11px 0}
+    label{display:block;font-size:13px;font-weight:650;color:#475569;margin-bottom:5px}input{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:12px;font-size:16px;background:#fff}
+    input[readonly]{background:#f4f6f8;color:#64748b}button{border:0;border-radius:11px;padding:12px 14px;font-size:15px;font-weight:700;background:#1f6feb;color:white;min-height:44px}
+    button.secondary{background:#e8eef7;color:#1f3658}button.warn{background:#0f766e}button:disabled{opacity:.45}.buttons{display:flex;gap:9px;flex-wrap:wrap}.buttons button{flex:1;min-width:145px}
+    .status{border-radius:12px;padding:12px;background:#e8eef7;white-space:pre-wrap;word-break:break-word;min-height:46px}.ok{background:#dcfce7;color:#166534}.err{background:#fee2e2;color:#991b1b}
+    .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#94a3b8;margin-right:7px}.connected .dot{background:#22c55e}.small{font-size:12px;color:#64748b;line-height:1.45}
+    .network-list{display:grid;gap:8px;margin-top:12px}.network-list:empty{display:none}.network-list button{width:100%;text-align:left;background:#f1f5f9;color:#1e293b;border:1px solid #cbd5e1;font-weight:600}.network-list button:active{background:#dbeafe;border-color:#60a5fa}
+    .check{display:flex;align-items:center;gap:9px;margin:10px 0;color:#334155;font-size:14px}.check input{width:20px;height:20px;margin:0}
+  </style>
+</head>
+<body><main>
+  <h1>Meeting Assistant</h1><p class="sub">Настройка устройства по Bluetooth</p>
+  <section class="card">
+    <h2 id="btState"><span class="dot"></span>Bluetooth не подключён</h2>
+    <div class="buttons"><button id="connectBt">Подключить устройство</button><button id="disconnectBt" class="secondary" disabled>Отключить</button></div>
+    <p class="small">На диктофоне откройте меню и включите «BT СОПРЯЖЕНИЕ», затем выберите Meeting Assistant.</p>
+  </section>
+  <section class="card">
+    <h2>Wi‑Fi</h2>
+    <div class="field"><label for="ssid">Название или похожая часть названия сети</label><input id="ssid" list="networks" autocomplete="off" placeholder="Например: Konstr"><datalist id="networks"></datalist></div>
+    <div class="field"><label for="password">Пароль</label><input id="password" type="password" autocomplete="new-password" placeholder="Оставьте пустым, чтобы не менять"></div>
+    <label class="check"><input id="openNetwork" type="checkbox">Открытая сеть, без пароля</label>
+    <div class="buttons"><button id="scan" class="secondary" disabled>Найти сети</button><button id="connectWifi" disabled>Сохранить и подключить</button></div>
+    <div id="networkList" class="network-list"></div>
+    <p class="small" id="match"></p>
+  </section>
+  <section class="card">
+    <h2>Чувствительность к речи</h2>
+    <div class="row"><div class="field"><label>Шум комнаты, dB</label><input id="noise" readonly placeholder="—"></div><div class="field"><label>Порог речи, dB</label><input id="speech" readonly placeholder="—"></div></div>
+    <div class="field"><label for="silence">Порог тишины, dB</label><input id="silence" type="number" min="-90" max="-5" step="0.5" value="-42"></div>
+    <div class="buttons"><button id="measure" class="warn" disabled>Измерить шум 10 секунд</button><button id="applySuggested" class="secondary" disabled>Применить измеренное</button><button id="saveThreshold" disabled>Сохранить порог</button></div>
+    <p class="small">Во время измерения соблюдайте тишину. Порог речи устанавливается на 4 dB выше порога тишины.</p>
+  </section>
+  <section class="card"><h2>Состояние</h2><div id="status" class="status">Сначала подключите устройство.</div></section>
+</main>
+<script>
+const SERVICE='7d7a0000-3e6b-4f4b-9a5a-8f9c4a1e0000', RX='7d7a0001-3e6b-4f4b-9a5a-8f9c4a1e0000', TX='7d7a0002-3e6b-4f4b-9a5a-8f9c4a1e0000';
+let device,rx,tx,lastSuggestion=false;const $=id=>document.getElementById(id),enc=new TextEncoder(),dec=new TextDecoder('utf-8');
+function status(text,type=''){const e=$('status');e.textContent=text;e.className='status '+type}
+function enabled(on){for(const id of ['scan','connectWifi','measure','saveThreshold'])$(id).disabled=!on;$('disconnectBt').disabled=!on;$('connectBt').disabled=on}
+function btState(on){$('btState').className=on?'connected':'';$('btState').innerHTML='<span class="dot"></span>'+(on?'Meeting Assistant подключён':'Bluetooth не подключён');enabled(on)}
+function parse(text){status(text,text.startsWith('ОШИБКА')?'err':'ok');
+ const current=text.match(/SSID=([^;]*);ПАРОЛЬ=([^;]*)/);if(current){if(current[1]&&current[1]!=='-')$('ssid').value=current[1];$('password').value='';$('password').placeholder=current[2]==='СОХРАНЕН'?'Пароль сохранён — оставьте пустым':'Введите пароль Wi‑Fi'}
+ if(text.startsWith('СЕТИ=')){const list=text.slice(5).split(';').filter(Boolean);$('networks').innerHTML='';$('networkList').innerHTML='';list.forEach(n=>{const o=document.createElement('option');o.value=n;$('networks').appendChild(o);const b=document.createElement('button');b.type='button';b.textContent=n;b.onclick=()=>{$('ssid').value=n;status('Выбрана сеть: '+n,'ok')};$('networkList').appendChild(b)})}
+ if(text.startsWith('ВЫБРАНО='))$('match').textContent=text.replaceAll(';',' · ');
+ const m=text.match(/ШУМ=(-?[\d.]+)DB;РЕЧЬ=(-?[\d.]+)DB;ТИШИНА=(-?[\d.]+)DB/);if(m){$('noise').value=m[1];$('speech').value=m[2];$('silence').value=m[3];lastSuggestion=true;$('applySuggested').disabled=false}
+ const t=text.match(/ТИШИНА=(-?[\d.]+)DB;РЕЧЬ=(-?[\d.]+)DB/);if(t){$('silence').value=t[1];$('speech').value=t[2]}
+}
+async function send(command){
+ if(!rx||!tx)throw Error('Bluetooth не подключён');
+ status(command==='MEASURE'?'Идёт замер: сохраняйте тишину…':command==='SCAN'?'Поиск Wi-Fi сетей…':'Отправка…');
+ const data=enc.encode(command);
+ if(rx.writeValueWithResponse)await rx.writeValueWithResponse(data);else await rx.writeValue(data);
+ // Bluefy иногда пропускает GATT notification. После завершения команды
+ // явно читаем TX: сервер уже хранит в нём последний полный ответ.
+ await new Promise(resolve=>setTimeout(resolve,250));
+ const value=await tx.readValue();
+ if(value&&value.byteLength)parse(dec.decode(value));
+}
+function errorText(e){if(e==null)return 'пустой ответ Bluefy';if(typeof e==='string')return e;const parts=[];for(const k of ['name','message','code'])if(e[k]!=null)parts.push(k+'='+e[k]);if(parts.length)return parts.join('; ');try{return JSON.stringify(e)||String(e)}catch(_){return String(e)}}
+async function connectBt(){let stage='выбор устройства';try{status('Выберите Meeting Assistant…');device=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'Meeting Assistant',services:[SERVICE]}]});stage='создание GATT-соединения';device.addEventListener('gattserverdisconnected',()=>{rx=tx=null;btState(false);status('Bluetooth отключён','err')});const server=await device.gatt.connect();stage='поиск Wi-Fi Setup сервиса';status('Bluetooth подключён. Поиск сервиса…');const service=await server.getPrimaryService(SERVICE);stage='поиск RX/TX характеристик';status('Сервис найден. Подготовка параметров…');rx=await service.getCharacteristic(RX);tx=await service.getCharacteristic(TX);stage='включение уведомлений';await tx.startNotifications();tx.addEventListener('characteristicvaluechanged',e=>parse(dec.decode(e.target.value)));btState(true);status('Подключено. Чтение настроек…','ok');stage='чтение STATUS';await send('STATUS')}catch(e){btState(false);status('Ошибка на этапе «'+stage+'»: '+errorText(e),'err')}}
+$('connectBt').onclick=connectBt;$('disconnectBt').onclick=()=>device?.gatt?.disconnect();
+$('scan').onclick=()=>send('SCAN').catch(e=>status(e.message,'err'));
+$('connectWifi').onclick=async()=>{try{const ssid=$('ssid').value.trim(),pass=$('password').value,open=$('openNetwork').checked;if(!ssid)throw Error('Введите название сети');await send('SSID='+ssid);await send('OPEN='+(open?'1':'0'));if(!open&&pass)await send('PASS='+pass);$('password').value='';await send('CONNECT')}catch(e){status(e.message,'err')}};
+$('openNetwork').onchange=()=>{$('password').disabled=$('openNetwork').checked;if($('openNetwork').checked)$('password').value=''};
+$('measure').onclick=()=>{lastSuggestion=false;$('applySuggested').disabled=true;send('MEASURE').catch(e=>status(e.message,'err'))};
+$('applySuggested').onclick=async()=>{try{if(!lastSuggestion)throw Error('Сначала измерьте шум');await send('APPLY')}catch(e){status(e.message,'err')}};
+$('saveThreshold').onclick=()=>send('THRESHOLD='+$('silence').value).catch(e=>status(e.message,'err'));
+$('silence').oninput=()=>{$('speech').value=(Number($('silence').value)+4).toFixed(1)};
+if(!navigator.bluetooth){status('Откройте эту страницу именно в Bluefy: Web Bluetooth недоступен.','err');$('connectBt').disabled=true}
+</script></body></html>

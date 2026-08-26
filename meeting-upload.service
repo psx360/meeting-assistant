@@ -1,0 +1,12 @@
+[Unit]
+Description=Merge and upload completed meeting recordings
+After=network-online.target pipewire.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/radxa/meeting-upload.sh
+TimeoutStartSec=2h
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=meeting-upload

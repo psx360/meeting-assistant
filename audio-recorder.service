@@ -1,0 +1,15 @@
+[Unit]
+Description=AI recorder FFmpeg to SoX pipeline
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Requires=pipewire.service pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecStart=/home/radxa/audio-split-test.sh
+KillSignal=SIGINT
+TimeoutStopSec=15
+Restart=no
+SuccessExitStatus=127 130 255
+
+[Install]
+WantedBy=default.target
