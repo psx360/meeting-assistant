@@ -124,7 +124,7 @@ def audio_settings():
  except (OSError,ValueError,TypeError):return DEFAULT_MIC_GAIN,-38.,-42.
 def duration(s):return f"{int(s)//3600:02}:{(int(s)//60)%60:02}:{int(s)%60:02}"
 def main():
- d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;mic_gain,speech_db,silence_db=audio_settings()
+ d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;mic_gain,speech_db,silence_db=audio_settings()
  def stop(*_):
   nonlocal alive;alive=False
  signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
@@ -170,10 +170,13 @@ def main():
   elif pending:state="PROCESSING" if wifi else "WAIT_NETWORK"
   elif bt_active:state="BT_CONNECTED" if os.path.exists("/run/bt-client-connected") else "BT_PAIRING"
   else:state="READY"
-  if state not in ("READY","MENU"):menu=False
+  if state not in ("READY","MENU","SHUTDOWN_CONFIRM"):
+   menu=False;shutdown_confirm=False
   for event in controls.poll():
    if event=="KNOB" and state=="READY" and not menu:menu=True;menu_index=0
-   elif event in ("LEFT","RIGHT") and menu:menu_index=1-menu_index
+   elif event in ("LEFT","RIGHT") and menu:
+    menu_index=(menu_index+(-1 if event=="LEFT" else 1))%3
+   elif event=="BACK" and shutdown_confirm:shutdown_confirm=False;state="READY"
    elif event=="BACK" and menu:menu=False
    elif event=="BACK" and bt_active:
     subprocess.run(["systemctl","stop","bt-pairing-mode.service"],check=False);bt_active=False
@@ -183,20 +186,29 @@ def main():
    elif event in ("KNOB","CONFIRM") and menu:
     if menu_index==0:
      subprocess.run(["systemctl","restart","bt-pairing-mode.service"],check=False);bt_active=True;menu=False;state="BT_PAIRING"
+    elif menu_index==1:
+     menu=False;shutdown_confirm=True;state="SHUTDOWN_CONFIRM"
     else:menu=False
-  if menu:state="MENU"
+   elif event in ("KNOB","CONFIRM") and shutdown_confirm:
+    d.clear();d.centered(16,"ВЫКЛЮЧЕНИЕ",2);d.centered(42,"ПОДОЖДИТЕ");d.show()
+    subprocess.Popen(["systemctl","poweroff"])
+    shutdown_confirm=False
+  if shutdown_confirm:state="SHUTDOWN_CONFIRM"
+  elif menu:state="MENU"
   d.clear()
   if state!="READY":
    for x in range(3,8):
     for y in range(2,7):
      if (x-5)**2+(y-4)**2<=6:d.pixel(x,y)
-  top_names={"STARTING":"ЗАПУСК","STOPPING":"СТОП","PROCESSING":"ОТПР","WAIT_NETWORK":"ОЧЕРЕДЬ","ERROR":"ОШИБКА","BT_PAIRING":"BT","BT_CONNECTED":"BT","MENU":"МЕНЮ"}
+  top_names={"STARTING":"ЗАПУСК","STOPPING":"СТОП","PROCESSING":"ОТПР","WAIT_NETWORK":"ОЧЕРЕДЬ","ERROR":"ОШИБКА","BT_PAIRING":"BT","BT_CONNECTED":"BT","MENU":"МЕНЮ","SHUTDOWN_CONFIRM":"ПИТАНИЕ"}
   top=("ЗАП" if active else "ОТПР" if upload else "" if state=="READY" else top_names.get(state,state))
   d.text(12,1,top[:10]);d.text(96,1,time.strftime("%H:%M"))
   if state=="READY":
    d.centered(18,"ГОТОВ",2);d.centered(39,"НАЖМИТЕ КНОПКУ");d.text(1,56,"МИК ОК");d.text(80,56,"СЕТЬ ОК" if wifi else "СЕТЬ НЕТ")
   elif state=="MENU":
-   d.centered(13,"МЕНЮ",2);d.text(10,37,("> " if menu_index==0 else "  ")+"BT СОПРЯЖЕНИЕ");d.text(10,52,("> " if menu_index==1 else "  ")+"НАЗАД")
+   d.centered(8,"МЕНЮ",2);d.text(5,31,(">" if menu_index==0 else " ")+" BT СОПРЯЖЕНИЕ");d.text(5,44,(">" if menu_index==1 else " ")+" ВЫКЛЮЧИТЬ");d.text(5,57,(">" if menu_index==2 else " ")+" НАЗАД")
+  elif state=="SHUTDOWN_CONFIRM":
+   d.centered(13,"ВЫКЛЮЧИТЬ?",2);d.centered(39,"OK - ДА");d.centered(54,"BACK - НЕТ")
   elif state=="BT_PAIRING":
    d.centered(15,"BT РЕЖИМ",2);d.centered(37,"ПОИСК 15 МИН");d.centered(53,"MEETING ASSISTANT")
   elif state=="BT_CONNECTED":
