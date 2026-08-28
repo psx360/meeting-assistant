@@ -60,15 +60,13 @@ def multipart(fields, file_path):
     return boundary, body
 
 
-def transcribe_result(audio_path, references=()):
+def transcribe_result(audio_path):
     boundary, body = multipart(
         [
-            ("model", "gpt-4o-transcribe-diarize"),
-            ("response_format", "diarized_json"),
+            ("model", "gpt-4o-transcribe"),
+            ("response_format", "json"),
             ("language", "ru"),
-            ("chunking_strategy", "auto"),
-            *[("known_speaker_names[]", name) for name, _ in references],
-            *[("known_speaker_references[]", value) for _, value in references],
+            ("prompt", "Распознай дословно русскую речь. Не пересказывай, не исправляй и не добавляй сведения."),
         ],
         audio_path,
     )
@@ -133,47 +131,17 @@ def reference_audio(chunk, segment, directory, name):
 def transcribe_long(audio_path):
     lines = []
     raw_results = []
-    references = []
-    next_speaker = 1
     with tempfile.TemporaryDirectory(prefix="meeting-chunks-") as temporary:
         directory = Path(temporary)
         for chunk_index, (chunk, offset) in enumerate(make_chunks(audio_path, directory)):
-            log.info("TRANSCRIPTION_CHUNK_START index=%d offset=%.3f references=%d", chunk_index, offset, len(references))
-            result = transcribe_result(chunk, references)
+            log.info("TRANSCRIPTION_CHUNK_START index=%d offset=%.3f", chunk_index, offset)
+            result = transcribe_result(chunk)
             raw_results.append({"offset": offset, "result": result})
-            local_names = {}
-            mapped_segments = []
-            known_names = {name for name, _ in references}
-            for segment in result.get("segments", []):
-                local = str(segment.get("speaker") or "?")
-                if local in known_names:
-                    global_name = local
-                else:
-                    if local not in local_names:
-                        local_names[local] = f"speaker_{next_speaker}"
-                        next_speaker += 1
-                    global_name = local_names[local]
-                mapped_segments.append((segment, global_name))
-                start = max(0, int(offset + float(segment.get("start", 0))))
-                hours, remainder = divmod(start, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                timestamp = f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
-                text = str(segment.get("text", "")).strip()
-                if text:
-                    lines.append(f"[{timestamp}] {global_name}: {text}")
-            if len(references) < MAX_SPEAKER_REFERENCES:
-                existing = {name for name, _ in references}
-                for segment, global_name in mapped_segments:
-                    if global_name in existing:
-                        continue
-                    value = reference_audio(chunk, segment, directory, global_name)
-                    if value:
-                        references.append((global_name, value))
-                        existing.add(global_name)
-                    if len(references) >= MAX_SPEAKER_REFERENCES:
-                        break
-            log.info("TRANSCRIPTION_CHUNK_FINISHED index=%d segments=%d references=%d", chunk_index, len(mapped_segments), len(references))
-    return "\n".join(lines), raw_results
+            text = str(result.get("text", "")).strip()
+            if text:
+                lines.append(text)
+            log.info("TRANSCRIPTION_CHUNK_FINISHED index=%d chars=%d", chunk_index, len(text))
+    return "\n\n".join(lines), raw_results
 
 
 def response_text(prompt, max_output_tokens=8000, verbosity="medium"):
@@ -306,19 +274,14 @@ def process(metadata_path):
     log.info("PROCESSING_STARTED meeting=%s bytes=%d", metadata["meeting_id"], audio_size)
     if audio_size < 4096:
         raise NoSpeechError(f"audio file is too small: {audio_size} bytes")
-    raw_transcript, chunk_results = transcribe_long(audio_path)
-    if not raw_transcript:
+    transcript, chunk_results = transcribe_long(audio_path)
+    if not transcript:
         raise NoSpeechError("empty transcript")
-    transcript = normalize_russian_transcript(raw_transcript)
-    analysis = protocol(transcript)
-    result = "ДИАРИЗИРОВАННАЯ ТРАНСКРИПЦИЯ (РУССКИЙ ЯЗЫК, БЕЗ ПЕРЕСКАЗА)\n\n" + transcript + "\n\nПЕРЕСКАЗ И ИНТЕРПРЕТАЦИЯ\n\n" + analysis
-    response = publish(metadata, result)
+    response = publish(metadata, transcript)
     destination = COMPLETED / metadata["meeting_id"]
     destination.mkdir(parents=True, exist_ok=True)
-    (destination / "transcript-raw.txt").write_text(raw_transcript, encoding="utf-8")
     (destination / "transcript.txt").write_text(transcript, encoding="utf-8")
-    (destination / "diarization-chunks.json").write_text(json.dumps(chunk_results, ensure_ascii=False, indent=2), encoding="utf-8")
-    (destination / "protocol.txt").write_text(result, encoding="utf-8")
+    (destination / "transcription-chunks.json").write_text(json.dumps(chunk_results, ensure_ascii=False, indent=2), encoding="utf-8")
     audio_path.replace(destination / audio_path.name)
     working.unlink()
     log.info("PROCESSING_FINISHED meeting=%s sent=%s failed=%s", metadata["meeting_id"], response.get("sent"), response.get("failed"))

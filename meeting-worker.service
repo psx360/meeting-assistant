@@ -1,5 +1,5 @@
 [Unit]
-Description=Meeting audio transcription, diarization and protocol worker
+Description=Meeting audio transcription worker
 After=network-online.target meeting-assistant.service
 Wants=network-online.target
 Requires=meeting-assistant.service
