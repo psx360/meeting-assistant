@@ -16,7 +16,16 @@ def bt_configuration_active():return subprocess.run(["systemctl","is-active","--
 def start_recording():
  if bt_configuration_active():
   log.warning("RECORDING_START_BLOCKED reason=bt-configuration");return False
- log.info("RECORDING_START_REQUESTED");state("STARTING");result=user_systemctl("start",USER_SERVICE)
+ log.info("RECORDING_START_REQUESTED");state("STARTING")
+ # PipeWire can keep a valid-looking I2S source that only returns digital
+ # silence after boot.  Reopening the ALSA device through a fresh graph
+ # reliably restores it, and doing this before recording avoids touching a
+ # running meeting.
+ audio_reset=user_systemctl("restart","wireplumber.service","pipewire.service","pipewire-pulse.service")
+ if audio_reset.returncode:log.warning("AUDIO_SERVER_RESET_FAILED %s",audio_reset.stderr.strip())
+ else:log.info("AUDIO_SERVER_RESET_OK")
+ time.sleep(2)
+ result=user_systemctl("start",USER_SERVICE)
  if result.returncode:log.error("RECORDING_START_FAILED %s",result.stderr.strip());state("ERROR");return False
  time.sleep(.5);active=recording_active();log.info("RECORDING_STARTED" if active else "RECORDING_START_FAILED inactive");state("RECORDING" if active else "ERROR");return active
 def stop_recording(reason):
