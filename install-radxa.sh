@@ -36,11 +36,12 @@ install -m 0644 "$repo/wifi-watchdog.service" /etc/systemd/system/
 
 install -m 0755 "$repo/audio-split-test.sh" "$device_home/audio-split-test.sh"
 install -m 0755 "$repo/meeting-upload.sh" "$device_home/meeting-upload.sh"
+install -m 0755 "$repo/meeting-upload-http.py" "$device_home/meeting-upload-http.py"
 install -d -o "$device_user" -g "$device_user" -m 0755 "$device_home/.config/systemd/user"
 install -m 0644 "$repo/audio-recorder.service" "$device_home/.config/systemd/user/"
 install -m 0644 "$repo/meeting-upload.service" "$device_home/.config/systemd/user/"
 install -m 0644 "$repo/meeting-upload.timer" "$device_home/.config/systemd/user/"
-chown "$device_user:$device_user" "$device_home/audio-split-test.sh" "$device_home/meeting-upload.sh" "$device_home/.config/systemd/user/"*
+chown "$device_user:$device_user" "$device_home/audio-split-test.sh" "$device_home/meeting-upload.sh" "$device_home/meeting-upload-http.py" "$device_home/.config/systemd/user/"*
 
 install -d -o "$device_user" -g "$device_user" -m 0700 "$device_home/.config"
 if [[ ! -f "$device_home/.config/meeting-upload.env" ]]; then

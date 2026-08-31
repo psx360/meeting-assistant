@@ -28,25 +28,32 @@ def start_recording():
  result=user_systemctl("start",USER_SERVICE)
  if result.returncode:log.error("RECORDING_START_FAILED %s",result.stderr.strip());state("ERROR");return False
  time.sleep(.5);active=recording_active();log.info("RECORDING_STARTED" if active else "RECORDING_START_FAILED inactive");state("RECORDING" if active else "ERROR");return active
+def queue_upload():
+ upload=user_systemctl("start","--no-block",UPLOAD_SERVICE)
+ if upload.returncode:log.error("MEETING_UPLOAD_QUEUE_FAILED %s",upload.stderr.strip());state("ERROR");return False
+ log.info("MEETING_UPLOAD_QUEUED");state("PROCESSING");return True
 def stop_recording(reason):
  log.info("RECORDING_STOP_REQUESTED reason=%s",reason);state("STOPPING");result=user_systemctl("stop",USER_SERVICE)
  if result.returncode:log.error("RECORDING_STOP_FAILED %s",result.stderr.strip());state("ERROR");return False
- log.info("RECORDING_STOPPED");upload=user_systemctl("start","--no-block",UPLOAD_SERVICE)
- if upload.returncode:log.error("MEETING_UPLOAD_QUEUE_FAILED %s",upload.stderr.strip());state("ERROR")
- else:log.info("MEETING_UPLOAD_QUEUED");state("PROCESSING")
- return True
+ log.info("RECORDING_STOPPED");return queue_upload()
 def main():
  chip=gpiod.Chip(BUTTON_CHIP);line=chip.get_line(BUTTON_LINE);line.request(consumer="ai-recorder-button",type=gpiod.LINE_REQ_EV_BOTH_EDGES)
  running=True
  def terminate(*_):
   nonlocal running;running=False
  signal.signal(signal.SIGTERM,terminate);signal.signal(signal.SIGINT,terminate)
- last_event_at=0.;ignore_until=0.;state("RECORDING" if recording_active() else "READY")
+ last_event_at=0.;ignore_until=0.;last_status_check=0.;was_recording=recording_active();state("RECORDING" if was_recording else "READY")
  log.info("CONTROLLER_READY button=gpiochip4:17 falling-edge=toggle debounce=350ms shutdown=disabled")
  try:
   while running:
    now=time.monotonic()
-   if not line.event_wait(sec=0,nsec=50_000_000):continue
+   if not line.event_wait(sec=0,nsec=50_000_000):
+    if now-last_status_check>=1.0:
+     last_status_check=now;active=recording_active()
+     if was_recording and not active:
+      log.info("RECORDING_AUTO_STOPPED limit=6h");queue_upload()
+     was_recording=active
+    continue
    event=line.event_read();now=time.monotonic()
    if now<ignore_until:continue
    if now-last_event_at<DEBOUNCE_SECONDS:continue
@@ -54,8 +61,8 @@ def main():
    if event.type==gpiod.LineEvent.FALLING_EDGE:
     active=recording_active();log.info("BUTTON_PRESSED recording=%s",str(active).lower())
     if active:
-     log.info("BUTTON_PRESSED_DURING_RECORDING");stop_recording("button")
-    else:start_recording()
+     log.info("BUTTON_PRESSED_DURING_RECORDING");stop_recording("button");was_recording=False
+    else:was_recording=start_recording()
     while line.event_wait(sec=0,nsec=0):line.event_read()
     last_event_at=time.monotonic();ignore_until=last_event_at+1.0
     continue

@@ -1,5 +1,5 @@
 [Unit]
-Description=AI recorder FFmpeg to SoX pipeline
+Description=AI recorder FFmpeg Opus pipeline
 After=pipewire.service pipewire-pulse.service wireplumber.service
 Requires=pipewire.service pipewire-pulse.service
 

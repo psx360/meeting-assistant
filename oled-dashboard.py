@@ -2,6 +2,7 @@
 import array, fcntl, glob, json, math, os, signal, subprocess, threading, time
 import gpiod
 I2C_DEV="/dev/i2c-0"; I2C_ADDR=0x3C; STATE_FILE="/run/ai-recorder-state"; LEVEL_FILE="/run/ai-recorder-audio-level"
+UPLOAD_PROGRESS_FILE="/run/user/1000/meeting-upload-progress.json"; AUTO_STOP_SECONDS=6*3600; AUTO_STOP_WARNING_SECONDS=15*60
 SOURCE="alsa_input.platform-inmp441-sound.stereo-fallback"
 DEFAULT_MIC_GAIN=float(os.environ.get("MIC_GAIN","4"))
 SETTINGS_FILE="/var/lib/meeting-recorder/settings.json"
@@ -114,6 +115,11 @@ def upload_pending():
  for ready in glob.glob("/home/radxa/audio-split-test/*/.ready"):
   if not os.path.exists(os.path.join(os.path.dirname(ready),".uploaded")):return True
  return False
+def upload_progress():
+ try:
+  with open(UPLOAD_PROGRESS_FILE,encoding="utf-8") as f:value=json.load(f)
+  return str(value.get("phase","")),max(0,min(100,int(value.get("percent",0))))
+ except (OSError,ValueError,TypeError):return "",0
 def disk_ok():
  try:s=os.statvfs("/home/radxa");return s.f_bavail*s.f_frsize>1024**3
  except OSError:return False
@@ -124,7 +130,7 @@ def audio_settings():
  except (OSError,ValueError,TypeError):return DEFAULT_MIC_GAIN,-38.,-42.
 def duration(s):return f"{int(s)//3600:02}:{(int(s)//60)%60:02}:{int(s)%60:02}"
 def main():
- d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;mic_gain,speech_db,silence_db=audio_settings()
+ d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;upload_phase="";upload_percent=0;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;mic_gain,speech_db,silence_db=audio_settings()
  def stop(*_):
   nonlocal alive;alive=False
  signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
@@ -138,7 +144,7 @@ def main():
    else:
     inactive_checks+=1
     if inactive_checks>=5:active=False
-   upload=user_active("meeting-upload.service");pending=upload_pending();bt_active=system_active("bt-pairing-mode.service");wifi=wifi_ok();new_gain,speech_db,silence_db=audio_settings();last=now
+   upload=user_active("meeting-upload.service");upload_phase,upload_percent=upload_progress();pending=upload_pending();bt_active=system_active("bt-pairing-mode.service");wifi=wifi_ok();new_gain,speech_db,silence_db=audio_settings();last=now
    if new_gain!=mic_gain:
     mic_gain=new_gain
     if m.running:m.stop()
@@ -165,6 +171,7 @@ def main():
   except OSError:state_age=999
   if req in ("STARTING","STOPPING","ERROR"):state=req
   elif req=="PROCESSING" and (upload or state_age<3):state="PROCESSING"
+  elif active and started and AUTO_STOP_SECONDS-(now-started)<=AUTO_STOP_WARNING_SECONDS:state="AUTO_STOP_WARNING"
   elif active:state="SILENCE" if silent else "SPEECH"
   elif upload:state="PROCESSING"
   elif pending:state="PROCESSING" if wifi else "WAIT_NETWORK"
@@ -200,7 +207,7 @@ def main():
    for x in range(3,8):
     for y in range(2,7):
      if (x-5)**2+(y-4)**2<=6:d.pixel(x,y)
-  top_names={"STARTING":"ЗАПУСК","STOPPING":"СТОП","PROCESSING":"ОТПР","WAIT_NETWORK":"ОЧЕРЕДЬ","ERROR":"ОШИБКА","BT_PAIRING":"BT","BT_CONNECTED":"BT","MENU":"МЕНЮ","SHUTDOWN_CONFIRM":"ПИТАНИЕ"}
+  top_names={"STARTING":"ЗАПУСК","STOPPING":"СТОП","PROCESSING":"ОТПР","WAIT_NETWORK":"ОЧЕРЕДЬ","ERROR":"ОШИБКА","BT_PAIRING":"BT","BT_CONNECTED":"BT","MENU":"МЕНЮ","SHUTDOWN_CONFIRM":"ПИТАНИЕ","AUTO_STOP_WARNING":"ЛИМИТ 6Ч"}
   top=("ЗАП" if active else "ОТПР" if upload else "" if state=="READY" else top_names.get(state,state))
   d.text(12,1,top[:10]);d.text(96,1,time.strftime("%H:%M"))
   if state=="READY":
@@ -216,9 +223,15 @@ def main():
   elif state in ("STARTING","STOPPING"):
    d.centered(17,"ЗАПУСК" if state=="STARTING" else "ОСТАНОВКА");d.centered(32,"ПОДГОТОВКА МИК" if state=="STARTING" else "СОХРАНЕНИЕ");d.text(7,54,"МИК ОК");d.text(80,54,"СЕТЬ ОК" if wifi else "СЕТЬ НЕТ")
   elif state=="PROCESSING":
-   d.centered(17,"ОБРАБОТКА");d.centered(32,"ОТПРАВКА",2);d.centered(55,"СЕТЬ ОК" if wifi else "ЖДЕМ СЕТЬ")
+   label="ЗАГРУЗКА" if upload_phase=="upload" else "ПОДГОТОВКА"
+   d.centered(12,label);d.centered(28,f"{upload_percent}%",2)
+   d.line(8,49,119,49);d.line(8,56,119,56);d.line(8,49,8,56);d.line(119,49,119,56)
+   if upload_percent:d.line(10,52,10+int(107*upload_percent/100),52);d.line(10,53,10+int(107*upload_percent/100),53)
   elif state=="WAIT_NETWORK":
    d.centered(14,"ОЖИДАЕТ",2);d.centered(34,"СЕТЬ",2);d.centered(55,"ЗАПИСЬ В ОЧЕРЕДИ")
+  elif state=="AUTO_STOP_WARNING":
+   remaining=max(0,AUTO_STOP_SECONDS-(now-started));minutes=max(1,int((remaining+59)//60))
+   d.centered(13,"АВТОСТОП",2);d.centered(36,f"ЧЕРЕЗ {minutes} МИН");d.centered(55,duration(now-started))
   elif state=="ERROR":d.centered(18,"ОШИБКА",2);d.centered(43,"СМОТРИ ЖУРНАЛ")
   else:
    d.centered(15,(f"ТИШИНА {int(now-silence) if silence is not None else 0} С") if silent else "РЕЧЬ")

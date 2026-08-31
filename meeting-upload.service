@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/home/radxa/meeting-upload.sh
-TimeoutStartSec=2h
+TimeoutStartSec=8h
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=meeting-upload
