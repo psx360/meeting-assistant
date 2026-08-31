@@ -13,6 +13,7 @@ getent group meetingassistant >/dev/null || groupadd --system meetingassistant
 id meetingassistant >/dev/null 2>&1 || useradd --system --gid meetingassistant --home /var/lib/meeting-assistant --shell /usr/sbin/nologin meetingassistant
 install -d -o meetingassistant -g meetingassistant -m 0750 /var/lib/meeting-assistant /opt/meeting-assistant
 install -o root -g meetingassistant -m 0750 "$repo/meeting-assistant-server.py" /opt/meeting-assistant/server.py
+install -o root -g meetingassistant -m 0640 "$repo/meeting-documents.py" /opt/meeting-assistant/meeting-documents.py
 install -o root -g meetingassistant -m 0750 "$repo/meeting-worker.py" /opt/meeting-assistant/worker.py
 install -d -o root -g root -m 0755 /var/www/meeting-setup
 install -o root -g root -m 0644 "$repo/bluefy-setup.html" /var/www/meeting-setup/index.html

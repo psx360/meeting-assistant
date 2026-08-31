@@ -21,13 +21,13 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 MEETING_API_TOKEN = os.environ["MEETING_API_TOKEN"]
 MEETING_MODEL = os.environ.get("OPENAI_MEETING_MODEL", "gpt-5.6-terra")
 PROMPT = (
-    "Подготовь аналитическую часть протокола производственного совещания на русском языке по транскрипции ниже. "
-    "Не повторяй и не переписывай исходную диаризированную транскрипцию: программа добавит её перед твоим ответом дословно. "
-    "Не выдумывай имена, должности, сроки и факты. Сохрани ссылки на спикеров и таймкоды. "
-    "Структура аналитической части: 1) краткое содержание; 2) обсуждавшиеся производственные проблемы; "
-    "3) принятые решения; 4) поручения с полями задача, ответственный, срок, источник; "
-    "5) риски по срокам, качеству и безопасности; 6) нерешённые вопросы. "
-    "Если ответственный или срок не названы, явно напиши «не указан».\n\nТРАНСКРИПЦИЯ:\n"
+    "Составь на русском языке самостоятельный структурированный протокол и краткую сводку встречи по транскрипции ниже. "
+    "Не повторяй полный текст транскрибации и не выдумывай имена, должности, решения, сроки или факты. "
+    "Сохраняй ссылки на спикеров и таймкоды, если они присутствуют. Используй ясные Markdown-заголовки. "
+    "Обязательно дай краткое содержание и основные тезисы. Затем добавляй только те разделы, для которых есть основания в разговоре: "
+    "принятые решения; организационные выводы; планы и поручения; нерешённые вопросы; риски. "
+    "Для поручения укажи задачу, ответственного и срок. Если само поручение было дано, но ответственный или срок не названы, "
+    "напиши «не указан». Не превращай предложение, идею или предварительное обсуждение в принятое решение.\n\nТРАНСКРИПЦИЯ:\n"
 )
 CHUNK_SECONDS = 1200
 MAX_SPEAKER_REFERENCES = 4
@@ -250,9 +250,9 @@ def protocol(transcript):
     return response_text(PROMPT + transcript)
 
 
-def publish(metadata, result):
+def publish(metadata, transcript, summary):
     payload = json.dumps(
-        {"meeting_id": metadata["meeting_id"], "title": metadata["title"], "protocol": result},
+        {"meeting_id": metadata["meeting_id"], "title": metadata["title"], "transcript": transcript, "summary": summary},
         ensure_ascii=False,
     ).encode()
     request = urllib.request.Request(
@@ -277,10 +277,12 @@ def process(metadata_path):
     transcript, chunk_results = transcribe_long(audio_path)
     if not transcript:
         raise NoSpeechError("empty transcript")
-    response = publish(metadata, transcript)
+    summary = protocol(transcript)
+    response = publish(metadata, transcript, summary)
     destination = COMPLETED / metadata["meeting_id"]
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "transcript.txt").write_text(transcript, encoding="utf-8")
+    (destination / "summary.txt").write_text(summary, encoding="utf-8")
     (destination / "transcription-chunks.json").write_text(json.dumps(chunk_results, ensure_ascii=False, indent=2), encoding="utf-8")
     audio_path.replace(destination / audio_path.name)
     working.unlink()

@@ -3,6 +3,7 @@ set -eu
 
 install -d -o meetingassistant -g meetingassistant -m 750 /var/lib/meeting-assistant
 install -o root -g meetingassistant -m 750 /tmp/meeting-assistant-server.py /opt/meeting-assistant/server.py
+install -o root -g meetingassistant -m 640 /tmp/meeting-documents.py /opt/meeting-assistant/meeting-documents.py
 install -o root -g root -m 644 /tmp/meeting-assistant.service /etc/systemd/system/meeting-assistant.service
 
 if ! grep -q '^TELEGRAM_WEBHOOK_SECRET=.' /etc/meeting-assistant.env; then

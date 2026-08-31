@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import json
+import importlib.util
 import logging
 import os
 import re
@@ -8,6 +9,7 @@ import sqlite3
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -27,6 +29,12 @@ VK_API_VERSION = "5.199"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("meeting-assistant")
+
+_documents_spec = importlib.util.spec_from_file_location(
+    "meeting_documents", os.path.join(os.path.dirname(__file__), "meeting-documents.py")
+)
+meeting_documents = importlib.util.module_from_spec(_documents_spec)
+_documents_spec.loader.exec_module(meeting_documents)
 
 
 def db_connect():
@@ -103,6 +111,24 @@ def post_form(url, fields):
         return json.load(response)
 
 
+def post_multipart(url, fields, file_field, filename, content, content_type):
+    boundary = "----meeting-" + uuid.uuid4().hex
+    body = bytearray()
+    for name, value in fields.items():
+        body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode("utf-8"))
+    body.extend(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; filename=\"{filename}\"\r\n"
+        f"Content-Type: {content_type}\r\n\r\n".encode("utf-8")
+    )
+    body.extend(content)
+    body.extend(f"\r\n--{boundary}--\r\n".encode("ascii"))
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, method="POST"
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
 def telegram(method, fields):
     if not TELEGRAM_KEY:
         raise RuntimeError("Telegram token is not configured")
@@ -115,6 +141,19 @@ def telegram(method, fields):
 def telegram_send(chat_id, text):
     for part in chunks(text):
         telegram("sendMessage", {"chat_id": chat_id, "text": part})
+
+
+def telegram_document(chat_id, filename, content):
+    if not TELEGRAM_KEY:
+        raise RuntimeError("Telegram token is not configured")
+    result = post_multipart(
+        f"https://api.telegram.org/bot{TELEGRAM_KEY}/sendDocument",
+        {"chat_id": str(chat_id)}, "document", filename, content,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    if not result.get("ok"):
+        raise RuntimeError(result.get("description", "Telegram API error"))
+    return result
 
 
 def vk(method, fields):
@@ -189,7 +228,12 @@ def handle_vk(event):
         vk_send(peer_id, "Напишите «Подписаться» или «Отписаться».")
 
 
-def broadcast(meeting_id, title, protocol):
+def safe_filename(value):
+    value = re.sub(r"[^A-Za-zА-Яа-яЁё0-9._ -]+", "_", value).strip(" ._")
+    return value[:100] or "Собрание"
+
+
+def broadcast(meeting_id, title, transcript, summary):
     now = int(time.time())
     with db_connect() as db:
         existing = db.execute("SELECT 1 FROM broadcasts WHERE meeting_id=?", (meeting_id,)).fetchone()
@@ -197,20 +241,24 @@ def broadcast(meeting_id, title, protocol):
             return {"duplicate": True, "sent": 0, "failed": 0}
         db.execute(
             "INSERT INTO broadcasts(meeting_id, title, protocol, created_at) VALUES (?, ?, ?, ?)",
-            (meeting_id, title, protocol, now),
+            (meeting_id, title, summary, now),
         )
         recipients = db.execute(
             "SELECT platform, recipient_id FROM subscribers WHERE active=1 ORDER BY platform, recipient_id"
         ).fetchall()
 
-    text = f"{title}\n\n{protocol}".strip()
+    stem = safe_filename(title)
+    transcript_docx = meeting_documents.build_docx(f"{title} — транскрибация", transcript)
+    summary_docx = meeting_documents.build_docx(f"{title} — протокол и сводка", summary, structured=True)
     sent = failed = 0
     for platform, recipient_id in recipients:
         try:
             if platform == "telegram":
-                telegram_send(recipient_id, text)
+                telegram_document(recipient_id, f"{stem} - транскрибация.docx", transcript_docx)
+                telegram_document(recipient_id, f"{stem} - протокол и сводка.docx", summary_docx)
+                telegram_send(recipient_id, f"{title}\n\n{transcript}".strip())
             elif platform == "vk":
-                vk_send(recipient_id, text)
+                vk_send(recipient_id, f"{title}\n\n{summary}\n\nПОЛНАЯ ТРАНСКРИБАЦИЯ\n\n{transcript}".strip())
             else:
                 raise RuntimeError("unknown platform")
             status, error = "sent", None
@@ -341,11 +389,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             meeting_id = str(payload.get("meeting_id", "")).strip()
             title = str(payload.get("title", "Протокол собрания")).strip()
-            protocol = str(payload.get("protocol", "")).strip()
-            if not meeting_id or not protocol or len(meeting_id) > 200:
-                self.reply(400, "meeting_id and protocol are required")
+            transcript = str(payload.get("transcript", "")).strip()
+            summary = str(payload.get("summary", "")).strip()
+            if not meeting_id or not transcript or not summary or len(meeting_id) > 200:
+                self.reply(400, "meeting_id, transcript and summary are required")
                 return
-            result = broadcast(meeting_id, title, protocol)
+            result = broadcast(meeting_id, title, transcript, summary)
             self.reply(200, json.dumps({"ok": True, **result}), "application/json")
             return
 
