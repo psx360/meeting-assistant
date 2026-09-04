@@ -48,8 +48,14 @@ def stop_recording(reason):
 def dismiss_meeting_qr():
  try:
   import json
-  with open(DISPLAY_STATE_FILE,encoding="utf-8") as source:meeting_id=str(json.load(source).get("meeting_id","")).strip()
+  with open(DISPLAY_STATE_FILE,encoding="utf-8") as source:display=json.load(source)
+  meeting_id=str(display.get("meeting_id","")).strip()
   if not meeting_id:return False
+  if display.get("phase")=="stopped" and int(display.get("qr_until",0))<=int(time.time()):return False
+  try:
+   with open(DISPLAY_DISMISSED_FILE,encoding="utf-8") as source:already_dismissed=source.read().strip()
+  except OSError:already_dismissed=""
+  if already_dismissed==meeting_id:return False
   temporary=DISPLAY_DISMISSED_FILE+".tmp"
   with open(temporary,"w",encoding="utf-8") as output:output.write(meeting_id+"\n")
   os.replace(temporary,DISPLAY_DISMISSED_FILE);log.info("MEETING_QR_DISMISSED meeting=%s",meeting_id);return True

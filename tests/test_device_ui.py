@@ -59,6 +59,7 @@ class DeviceUiTests(unittest.TestCase):
             value.update(phase="stopped", qr_until=4_102_444_800)
             state.write_text(json.dumps(value), encoding="utf-8")
             self.assertEqual(self.dashboard.meeting_display(), {})
+            self.assertFalse(self.controller.dismiss_meeting_qr())
 
             value.update(meeting_id="meeting-2")
             state.write_text(json.dumps(value), encoding="utf-8")
