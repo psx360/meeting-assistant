@@ -44,6 +44,17 @@ class DeviceUiTests(unittest.TestCase):
         self.assertFalse(self.controller.ignore_bounced_edge(False, 0.02))
         self.assertFalse(self.controller.ignore_bounced_edge(True, 0.10))
 
+    def test_qr_dismiss_ignores_every_edge_through_release(self):
+        ignored, waiting = self.controller.qr_dismiss_guard(True, False)
+        self.assertTrue(ignored)
+        self.assertTrue(waiting)
+        ignored, waiting = self.controller.qr_dismiss_guard(waiting, True)
+        self.assertTrue(ignored)
+        self.assertFalse(waiting)
+        ignored, waiting = self.controller.qr_dismiss_guard(waiting, False)
+        self.assertFalse(ignored)
+        self.assertFalse(waiting)
+
     def test_percent_glyph_is_available_for_both_progress_screens(self):
         self.assertIn("%", self.dashboard.FONT)
         self.assertNotEqual(self.dashboard.FONT["%"], self.dashboard.FONT["?"])

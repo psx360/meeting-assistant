@@ -62,13 +62,16 @@ def dismiss_meeting_qr():
  except FileNotFoundError:return False
  except (OSError,ValueError,TypeError) as e:log.warning("MEETING_QR_DISMISS_FAILED %s",e);return False
 def ignore_bounced_edge(is_falling,elapsed):return is_falling and elapsed<DEBOUNCE_SECONDS
+def qr_dismiss_guard(waiting_for_release,is_rising):
+ if not waiting_for_release:return False,False
+ return True,not is_rising
 def main():
  chip=gpiod.Chip(BUTTON_CHIP);line=chip.get_line(BUTTON_LINE);line.request(consumer="ai-recorder-button",type=gpiod.LINE_REQ_EV_BOTH_EDGES)
  running=True
  def terminate(*_):
   nonlocal running;running=False
  signal.signal(signal.SIGTERM,terminate);signal.signal(signal.SIGINT,terminate)
- last_event_at=0.;press_started=None;press_was_recording=False;long_action_fired=False;last_status_check=0.;was_recording=recording_active();state("RECORDING" if was_recording else "READY")
+ last_event_at=0.;press_started=None;press_was_recording=False;long_action_fired=False;qr_waiting_for_release=False;last_status_check=0.;was_recording=recording_active();state("RECORDING" if was_recording else "READY")
  log.info("CONTROLLER_READY button=gpiochip4:17 short=start-or-clear-qr long=stop-at-threshold threshold=1.5s")
  try:
   while running:
@@ -84,12 +87,16 @@ def main():
      was_recording=active
     continue
    event=line.event_read();now=time.monotonic()
+   guarded,qr_waiting_for_release=qr_dismiss_guard(qr_waiting_for_release,event.type==gpiod.LineEvent.RISING_EDGE)
+   if guarded:
+    if event.type==gpiod.LineEvent.RISING_EDGE:log.info("BUTTON_RELEASED after=qr-clear")
+    continue
    if ignore_bounced_edge(event.type==gpiod.LineEvent.FALLING_EDGE,now-last_event_at):continue
    last_event_at=now
    if event.type==gpiod.LineEvent.FALLING_EDGE:
     active=recording_active();log.info("BUTTON_PRESSED recording=%s",str(active).lower())
     if not active and dismiss_meeting_qr():
-     state("READY");press_started=None;press_was_recording=False;long_action_fired=False
+     state("READY");press_started=None;press_was_recording=False;long_action_fired=False;qr_waiting_for_release=True
      continue
     press_started=now;press_was_recording=active;long_action_fired=False
     continue
