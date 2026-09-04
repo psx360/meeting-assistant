@@ -179,8 +179,11 @@ def audio_settings():
   return float(data.get("gain",DEFAULT_MIC_GAIN)),float(data.get("speech_db",-38)),float(data.get("silence_db",-42))
  except (OSError,ValueError,TypeError):return DEFAULT_MIC_GAIN,-38.,-42.
 def duration(s):return f"{int(s)//3600:02}:{(int(s)//60)%60:02}:{int(s)%60:02}"
+def meter_percent(db,floor_db,ceiling_db=-6.):
+ if ceiling_db<=floor_db:return 0
+ return max(0,min(100,int((db-floor_db)*100/(ceiling_db-floor_db))))
 def main():
- d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;upload_phase="";upload_percent=0;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;ip_screen=False;ip_value="";meeting={};mic_gain,speech_db,silence_db=audio_settings()
+ d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;upload_phase="";upload_percent=0;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;ip_screen=False;ip_value="";meeting={};vu_level=0.;mic_gain,speech_db,silence_db=audio_settings()
  def stop(*_):
   nonlocal alive;alive=False
  signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
@@ -203,6 +206,9 @@ def main():
    if active and not started:started=now
    if not active and inactive_checks>=5:started=0;silence=None;speech=False;hist=[0]*20
   db=m.value()
+  target_level=meter_percent(db,silence_db)
+  response=.45 if target_level>vu_level else .18
+  vu_level+=response*(target_level-vu_level)
   if active:
    if db >= speech_db:
     speech=True;silence=None
@@ -264,11 +270,10 @@ def main():
    if not d.qr(meeting.get("join_url",""),0,0,64):
     d.centered(17,"QR ОШИБКА");d.centered(34,"НЕТ МОДУЛЯ");d.centered(50,"PYTHON3-QRCODE")
    elif state=="RECORDING_QR":
-    level=max(0,min(100,int((db+60)*100/60)))
     d.text(72,2,duration(now-started));d.text(84,18,"МИК")
     d.line(70,31,126,31);d.line(70,40,126,40);d.line(70,31,70,40);d.line(126,31,126,40)
-    if level:d.line(72,35,72+int(52*level/100),35);d.line(72,36,72+int(52*level/100),36)
-    d.text(78,49,f"{int(db):d} DB")
+    if vu_level>=1:d.line(72,35,72+int(52*vu_level/100),35);d.line(72,36,72+int(52*vu_level/100),36)
+    d.text(84,49,f"{int(vu_level):d}%")
    else:
     remaining=max(0,int(meeting.get("qr_until",0)-time.time()))
     d.text(69,1,"ГОТОВО");d.text(69,15,f"QR {remaining//60}:{remaining%60:02}");d.text(69,31,"НАЖАТЬ");d.text(69,43,"КНОПКУ");d.text(69,55,"УБРАТЬ")

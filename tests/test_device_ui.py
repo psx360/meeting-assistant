@@ -32,6 +32,13 @@ class DeviceUiTests(unittest.TestCase):
         self.assertTrue(all(display.buf[(3 // 8) * 128 + x] & (1 << 3) for x in range(2, 6)))
         self.assertTrue(all(display.buf[(y // 8) * 128 + 8] & (1 << (y & 7)) for y in range(1, 5)))
 
+    def test_meter_uses_silence_threshold_as_zero_and_keeps_headroom(self):
+        self.assertEqual(self.dashboard.meter_percent(-42.6, -42.6), 0)
+        self.assertLess(self.dashboard.meter_percent(-39.0, -42.6), 15)
+        self.assertGreater(self.dashboard.meter_percent(-30.0, -42.6), 30)
+        self.assertEqual(self.dashboard.meter_percent(-6.0, -42.6), 100)
+        self.assertEqual(self.dashboard.meter_percent(0.0, -42.6), 100)
+
     def test_dismissed_qr_stays_hidden_when_recording_exit_rewrites_state(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "meeting-display.json"
