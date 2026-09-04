@@ -4,6 +4,8 @@ import gpiod
 BUTTON_CHIP="gpiochip4";BUTTON_LINE=17;DEBOUNCE_SECONDS=.08;LONG_PRESS_SECONDS=1.5;RADXA_UID=1000
 USER_SERVICE="audio-recorder.service";UPLOAD_SERVICE="meeting-upload.service";STATE_FILE="/run/ai-recorder-state"
 DISPLAY_STATE_FILE=f"/run/user/{RADXA_UID}/meeting-display.json"
+DISPLAY_DISMISSED_FILE=f"/run/user/{RADXA_UID}/meeting-display-dismissed"
+UPLOAD_PROGRESS_FILE=f"/run/user/{RADXA_UID}/meeting-upload-progress.json"
 logging.basicConfig(level=logging.INFO,format="%(message)s");log=logging.getLogger("recorder-controller")
 def state(value):
  try:
@@ -18,6 +20,9 @@ def start_recording():
  if bt_configuration_active():
   log.warning("RECORDING_START_BLOCKED reason=bt-configuration");return False
  log.info("RECORDING_START_REQUESTED");state("STARTING")
+ try:os.unlink(DISPLAY_DISMISSED_FILE)
+ except FileNotFoundError:pass
+ except OSError as e:log.warning("MEETING_QR_DISMISS_RESET_FAILED %s",e)
  # PipeWire can keep a valid-looking I2S source that only returns digital
  # silence after boot.  Reopening the ALSA device through a fresh graph
  # reliably restores it, and doing this before recording avoids touching a
@@ -30,6 +35,9 @@ def start_recording():
  if result.returncode:log.error("RECORDING_START_FAILED %s",result.stderr.strip());state("ERROR");return False
  time.sleep(.5);active=recording_active();log.info("RECORDING_STARTED" if active else "RECORDING_START_FAILED inactive");state("RECORDING" if active else "ERROR");return active
 def queue_upload():
+ try:os.unlink(UPLOAD_PROGRESS_FILE)
+ except FileNotFoundError:pass
+ except OSError as e:log.warning("UPLOAD_PROGRESS_RESET_FAILED %s",e)
  upload=user_systemctl("start","--no-block",UPLOAD_SERVICE)
  if upload.returncode:log.error("MEETING_UPLOAD_QUEUE_FAILED %s",upload.stderr.strip());state("ERROR");return False
  log.info("MEETING_UPLOAD_QUEUED");state("PROCESSING");return True
@@ -37,10 +45,16 @@ def stop_recording(reason):
  log.info("RECORDING_STOP_REQUESTED reason=%s",reason);state("STOPPING");result=user_systemctl("stop",USER_SERVICE)
  if result.returncode:log.error("RECORDING_STOP_FAILED %s",result.stderr.strip());state("ERROR");return False
  log.info("RECORDING_STOPPED");return queue_upload()
-def clear_meeting_qr():
- try:os.unlink(DISPLAY_STATE_FILE);log.info("MEETING_QR_CLEARED");return True
+def dismiss_meeting_qr():
+ try:
+  import json
+  with open(DISPLAY_STATE_FILE,encoding="utf-8") as source:meeting_id=str(json.load(source).get("meeting_id","")).strip()
+  if not meeting_id:return False
+  temporary=DISPLAY_DISMISSED_FILE+".tmp"
+  with open(temporary,"w",encoding="utf-8") as output:output.write(meeting_id+"\n")
+  os.replace(temporary,DISPLAY_DISMISSED_FILE);log.info("MEETING_QR_DISMISSED meeting=%s",meeting_id);return True
  except FileNotFoundError:return False
- except OSError as e:log.warning("MEETING_QR_CLEAR_FAILED %s",e);return False
+ except (OSError,ValueError,TypeError) as e:log.warning("MEETING_QR_DISMISS_FAILED %s",e);return False
 def main():
  chip=gpiod.Chip(BUTTON_CHIP);line=chip.get_line(BUTTON_LINE);line.request(consumer="ai-recorder-button",type=gpiod.LINE_REQ_EV_BOTH_EDGES)
  running=True
@@ -67,7 +81,7 @@ def main():
    last_event_at=now
    if event.type==gpiod.LineEvent.FALLING_EDGE:
     active=recording_active();log.info("BUTTON_PRESSED recording=%s",str(active).lower())
-    if not active and clear_meeting_qr():
+    if not active and dismiss_meeting_qr():
      state("READY");press_started=None;press_was_recording=False;long_action_fired=False
      continue
     press_started=now;press_was_recording=active;long_action_fired=False

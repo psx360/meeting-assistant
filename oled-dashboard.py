@@ -6,6 +6,7 @@ except ImportError:qrcode=None
 I2C_DEV="/dev/i2c-0"; I2C_ADDR=0x3C; STATE_FILE="/run/ai-recorder-state"; LEVEL_FILE="/run/ai-recorder-audio-level"
 UPLOAD_PROGRESS_FILE="/run/user/1000/meeting-upload-progress.json"; AUTO_STOP_SECONDS=6*3600; AUTO_STOP_WARNING_SECONDS=15*60
 MEETING_DISPLAY_FILE="/run/user/1000/meeting-display.json"
+MEETING_DISPLAY_DISMISSED_FILE="/run/user/1000/meeting-display-dismissed"
 SOURCE="alsa_input.platform-inmp441-sound.stereo-fallback"
 DEFAULT_MIC_GAIN=float(os.environ.get("MIC_GAIN","4"))
 SETTINGS_FILE="/var/lib/meeting-recorder/settings.json"
@@ -46,8 +47,15 @@ class Display:
        for dy in range(scale): self.pixel(x+gx*scale+dx,y+gy*scale+dy)
    x+=6*scale
  def centered(self,y,s,scale=1): self.text(max(0,(128-len(s)*6*scale+scale)//2),y,s,scale)
- def line(self,x,y0,y1):
-  for y in range(y0,y1+1): self.pixel(x,y)
+ def line(self,x0,y0,x1,y1=None):
+  if y1 is None:x1,y1=x0,x1
+  dx=abs(x1-x0);sx=1 if x0<x1 else -1;dy=-abs(y1-y0);sy=1 if y0<y1 else -1;error=dx+dy
+  while True:
+   self.pixel(x0,y0)
+   if x0==x1 and y0==y1:break
+   twice=2*error
+   if twice>=dy:error+=dy;x0+=sx
+   if twice<=dx:error+=dx;y0+=sy
  def qr(self,value,x=0,y=0,max_size=64):
   if qrcode is None:return False
   code=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=1,border=2)
@@ -143,6 +151,10 @@ def current_ip():
 def meeting_display():
  try:
   with open(MEETING_DISPLAY_FILE,encoding="utf-8") as source:value=json.load(source)
+  try:
+   with open(MEETING_DISPLAY_DISMISSED_FILE,encoding="utf-8") as source:dismissed=source.read().strip()
+  except OSError:dismissed=""
+  if dismissed and dismissed==str(value.get("meeting_id","")):return {}
   if value.get("phase")=="stopped" and int(value.get("qr_until",0))<=int(time.time()):
    try:os.unlink(MEETING_DISPLAY_FILE)
    except FileNotFoundError:pass
@@ -252,7 +264,11 @@ def main():
    if not d.qr(meeting.get("join_url",""),0,0,64):
     d.centered(17,"QR ОШИБКА");d.centered(34,"НЕТ МОДУЛЯ");d.centered(50,"PYTHON3-QRCODE")
    elif state=="RECORDING_QR":
-    d.text(69,1,"ЗАПИСЬ");d.text(69,15,duration(now-started));d.text(69,31,"ДЕРЖАТЬ");d.text(69,43,"1.5 С");d.text(69,55,"СТОП")
+    level=max(0,min(100,int((db+60)*100/60)))
+    d.text(72,2,duration(now-started));d.text(84,18,"МИК")
+    d.line(70,31,126,31);d.line(70,40,126,40);d.line(70,31,70,40);d.line(126,31,126,40)
+    if level:d.line(72,35,72+int(52*level/100),35);d.line(72,36,72+int(52*level/100),36)
+    d.text(78,49,f"{int(db):d} DB")
    else:
     remaining=max(0,int(meeting.get("qr_until",0)-time.time()))
     d.text(69,1,"ГОТОВО");d.text(69,15,f"QR {remaining//60}:{remaining%60:02}");d.text(69,31,"НАЖАТЬ");d.text(69,43,"КНОПКУ");d.text(69,55,"УБРАТЬ")
@@ -279,8 +295,7 @@ def main():
   elif state in ("STARTING","STOPPING"):
    d.centered(17,"ЗАПУСК" if state=="STARTING" else "ОСТАНОВКА");d.centered(32,"ПОДГОТОВКА МИК" if state=="STARTING" else "СОХРАНЕНИЕ");d.text(7,54,"МИК ОК");d.text(80,54,"СЕТЬ ОК" if wifi else "СЕТЬ НЕТ")
   elif state=="PROCESSING":
-   label="ЗАГРУЗКА" if upload_phase=="upload" else "ПОДГОТОВКА"
-   d.centered(12,label);d.centered(28,f"{upload_percent}%",2)
+   d.centered(12,"ОТПРАВКА");d.centered(28,f"{upload_percent}%",2)
    d.line(8,49,119,49);d.line(8,56,119,56);d.line(8,49,8,56);d.line(119,49,119,56)
    if upload_percent:d.line(10,52,10+int(107*upload_percent/100),52);d.line(10,53,10+int(107*upload_percent/100),53)
   elif state=="WAIT_NETWORK":

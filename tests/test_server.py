@@ -114,6 +114,49 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(fields["attachment"], "doc-1_1,doc-1_2")
         self.assertNotIn("message", fields)
 
+    def test_vk_document_upload_retries_missing_file_token(self):
+        def vk_method(method, _fields):
+            if method == "docs.getMessagesUploadServer":
+                return {"response": {"upload_url": "https://upload.test"}}
+            if method == "docs.save":
+                return {"response": {"doc": {"owner_id": -1, "id": 2}}}
+            self.fail(f"unexpected VK method: {method}")
+
+        with mock.patch.object(self.server, "vk", side_effect=vk_method), mock.patch.object(
+            self.server, "post_multipart", side_effect=[{}, {"file": "token"}]
+        ) as upload, mock.patch.object(self.server.time, "sleep"):
+            attachment = self.server.vk_document_attachment("55", "protocol.docx", b"docx")
+        self.assertEqual(attachment, "doc-1_2")
+        self.assertEqual(upload.call_count, 2)
+
+    def test_any_vk_text_enables_global_subscription(self):
+        self.server.set_subscription("vk", "55", False)
+        event = {
+            "type": "message_new",
+            "object": {"message": {"peer_id": 55, "text": "Любой текст"}},
+        }
+        with mock.patch.object(self.server, "vk_send") as send:
+            self.server.handle_vk(event)
+        with self.server.db_connect() as db:
+            subscription = db.execute(
+                "SELECT active FROM subscribers WHERE platform='vk' AND recipient_id='55'"
+            ).fetchone()
+        self.assertEqual(subscription, (1,))
+        send.assert_called_once_with(55, "Вы подписаны на протоколы собраний.")
+
+    def test_vk_unsubscribe_word_no_longer_disables_subscription(self):
+        event = {
+            "type": "message_new",
+            "object": {"message": {"peer_id": 55, "text": "Отписаться"}},
+        }
+        with mock.patch.object(self.server, "vk_send"):
+            self.server.handle_vk(event)
+        with self.server.db_connect() as db:
+            subscription = db.execute(
+                "SELECT active FROM subscribers WHERE platform='vk' AND recipient_id='55'"
+            ).fetchone()
+        self.assertEqual(subscription, (1,))
+
     def test_telegram_broadcast_sends_only_two_documents(self):
         self.server.set_subscription("telegram", "owner", True)
         with mock.patch.object(self.server, "telegram_document") as send_document, mock.patch.object(

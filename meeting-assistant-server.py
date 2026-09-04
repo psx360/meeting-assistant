@@ -241,17 +241,24 @@ def vk_send(peer_id, text):
 
 
 def vk_document_attachment(peer_id, filename, content):
-    upload = vk("docs.getMessagesUploadServer", {"peer_id": peer_id, "type": "doc"}).get("response") or {}
-    upload_url = upload.get("upload_url", "")
-    if not upload_url:
-        raise RuntimeError("VK did not return a document upload URL")
-    uploaded = post_multipart(
-        upload_url, {}, "file", filename, content,
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
-    file_token = uploaded.get("file", "")
+    file_token = ""
+    for attempt in range(1, 4):
+        upload = vk("docs.getMessagesUploadServer", {"peer_id": peer_id, "type": "doc"}).get("response") or {}
+        upload_url = upload.get("upload_url", "")
+        if not upload_url:
+            raise RuntimeError("VK did not return a document upload URL")
+        uploaded = post_multipart(
+            upload_url, {}, "file", filename, content,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        file_token = uploaded.get("file", "")
+        if file_token:
+            break
+        log.warning("VK_DOCUMENT_UPLOAD_RETRY peer=%s file=%s attempt=%d", peer_id, safe_filename(filename), attempt)
+        if attempt < 3:
+            time.sleep(0.5 * attempt)
     if not file_token:
-        raise RuntimeError("VK document upload did not return a file token")
+        raise RuntimeError("VK document upload did not return a file token after 3 attempts")
     saved = vk("docs.save", {"file": file_token, "title": filename}).get("response")
     if isinstance(saved, list):
         document = saved[0] if saved else {}
@@ -346,15 +353,12 @@ def handle_vk(event):
         set_meeting_subscription(meeting_id, "vk", peer_id)
         vk_send(peer_id, "Вы подписаны только на документы этого собрания.")
         return
-    command = subscription_command(message.get("text", ""))
-    if command is True:
+    text = str(message.get("text", "")).strip()
+    if text:
         set_subscription("vk", peer_id, True)
-        vk_send(peer_id, "Вы подписаны на протоколы собраний. Напишите «Отписаться», чтобы отключить рассылку.")
-    elif command is False:
-        set_subscription("vk", peer_id, False)
-        vk_send(peer_id, "Подписка на протоколы собраний отключена. Напишите «Подписаться», чтобы возобновить её.")
+        vk_send(peer_id, "Вы подписаны на протоколы собраний.")
     else:
-        vk_send(peer_id, "Напишите «Подписаться» или «Отписаться».")
+        vk_send(peer_id, "Отправьте любое текстовое сообщение, чтобы подписаться на протоколы собраний.")
 
 
 def safe_filename(value):
