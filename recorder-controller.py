@@ -61,6 +61,7 @@ def dismiss_meeting_qr():
   os.replace(temporary,DISPLAY_DISMISSED_FILE);log.info("MEETING_QR_DISMISSED meeting=%s",meeting_id);return True
  except FileNotFoundError:return False
  except (OSError,ValueError,TypeError) as e:log.warning("MEETING_QR_DISMISS_FAILED %s",e);return False
+def ignore_bounced_edge(is_falling,elapsed):return is_falling and elapsed<DEBOUNCE_SECONDS
 def main():
  chip=gpiod.Chip(BUTTON_CHIP);line=chip.get_line(BUTTON_LINE);line.request(consumer="ai-recorder-button",type=gpiod.LINE_REQ_EV_BOTH_EDGES)
  running=True
@@ -83,7 +84,7 @@ def main():
      was_recording=active
     continue
    event=line.event_read();now=time.monotonic()
-   if now-last_event_at<DEBOUNCE_SECONDS:continue
+   if ignore_bounced_edge(event.type==gpiod.LineEvent.FALLING_EDGE,now-last_event_at):continue
    last_event_at=now
    if event.type==gpiod.LineEvent.FALLING_EDGE:
     active=recording_active();log.info("BUTTON_PRESSED recording=%s",str(active).lower())

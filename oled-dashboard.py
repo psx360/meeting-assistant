@@ -26,6 +26,7 @@ FONT.update({
 "Э":[34,73,73,73,62],"Ю":[127,8,62,65,62],"Я":[70,41,25,9,127]})
 FONT[">"]=[0,65,34,20,8]
 FONT["*"]=[20,8,62,8,20]
+FONT["%"]=[99,19,8,100,99]
 class Display:
  def __init__(self):
   self.fd=os.open(I2C_DEV,os.O_RDWR); fcntl.ioctl(self.fd,0x0703,I2C_ADDR); self.buf=bytearray(1024)
@@ -207,7 +208,7 @@ def main():
    if not active and inactive_checks>=5:started=0;silence=None;speech=False;hist=[0]*20
   db=m.value()
   target_level=meter_percent(db,silence_db)
-  response=.45 if target_level>vu_level else .18
+  response=.65 if target_level>vu_level else .55
   vu_level+=response*(target_level-vu_level)
   if active:
    if db >= speech_db:
@@ -270,10 +271,10 @@ def main():
    if not d.qr(meeting.get("join_url",""),0,0,64):
     d.centered(17,"QR ОШИБКА");d.centered(34,"НЕТ МОДУЛЯ");d.centered(50,"PYTHON3-QRCODE")
    elif state=="RECORDING_QR":
-    d.text(72,2,duration(now-started));d.text(84,18,"МИК")
-    d.line(70,31,126,31);d.line(70,40,126,40);d.line(70,31,70,40);d.line(126,31,126,40)
-    if vu_level>=1:d.line(72,35,72+int(52*vu_level/100),35);d.line(72,36,72+int(52*vu_level/100),36)
-    d.text(84,49,f"{int(vu_level):d}%")
+    d.text(72,5,duration(now-started))
+    d.line(70,25,126,25);d.line(70,36,126,36);d.line(70,25,70,36);d.line(126,25,126,36)
+    if vu_level>=1:d.line(72,30,72+int(52*vu_level/100),30);d.line(72,31,72+int(52*vu_level/100),31)
+    d.text(84,48,f"{int(vu_level):d}%")
    else:
     remaining=max(0,int(meeting.get("qr_until",0)-time.time()))
     d.text(69,1,"ГОТОВО");d.text(69,15,f"QR {remaining//60}:{remaining%60:02}");d.text(69,31,"НАЖАТЬ");d.text(69,43,"КНОПКУ");d.text(69,55,"УБРАТЬ")

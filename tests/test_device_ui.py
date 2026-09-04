@@ -39,6 +39,15 @@ class DeviceUiTests(unittest.TestCase):
         self.assertEqual(self.dashboard.meter_percent(-6.0, -42.6), 100)
         self.assertEqual(self.dashboard.meter_percent(0.0, -42.6), 100)
 
+    def test_button_debounce_never_discards_release_edge(self):
+        self.assertTrue(self.controller.ignore_bounced_edge(True, 0.02))
+        self.assertFalse(self.controller.ignore_bounced_edge(False, 0.02))
+        self.assertFalse(self.controller.ignore_bounced_edge(True, 0.10))
+
+    def test_percent_glyph_is_available_for_both_progress_screens(self):
+        self.assertIn("%", self.dashboard.FONT)
+        self.assertNotEqual(self.dashboard.FONT["%"], self.dashboard.FONT["?"])
+
     def test_dismissed_qr_stays_hidden_when_recording_exit_rewrites_state(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "meeting-display.json"
