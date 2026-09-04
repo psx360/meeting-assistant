@@ -1,4 +1,8 @@
 #!/usr/bin/python3
+import base64
+import hashlib
+import hmac
+import html
 import json
 import importlib.util
 import logging
@@ -25,7 +29,10 @@ VK_CONFIRMATION_CODE = os.environ.get("VK_CONFIRMATION_CODE", "")
 VK_SECRET = os.environ.get("VK_SECRET", "")
 VK_GROUP_ID = os.environ.get("VK_GROUP_ID", "")
 VK_GROUP_TOKEN = os.environ.get("VK_GROUP_TOKEN", "")
+VK_GROUP_SCREEN_NAME = os.environ.get("VK_GROUP_SCREEN_NAME", "")
 VK_API_VERSION = "5.199"
+JOIN_SIGNATURE_BYTES = 12
+JOIN_SIGNATURE_CHARS = len(base64.urlsafe_b64encode(b"\0" * JOIN_SIGNATURE_BYTES).decode().rstrip("="))
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("meeting-assistant")
@@ -60,6 +67,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS broadcasts (
                 meeting_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
+                transcript TEXT NOT NULL DEFAULT '',
                 protocol TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
@@ -72,8 +80,20 @@ def init_db():
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (meeting_id, platform, recipient_id)
             );
+            CREATE TABLE IF NOT EXISTS meeting_subscriptions (
+                meeting_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                subscribed_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (meeting_id, platform, recipient_id)
+            );
             """
         )
+        broadcast_columns = {row[1] for row in db.execute("PRAGMA table_info(broadcasts)")}
+        if "transcript" not in broadcast_columns:
+            db.execute("ALTER TABLE broadcasts ADD COLUMN transcript TEXT NOT NULL DEFAULT ''")
 
 
 def set_subscription(platform, recipient_id, active):
@@ -87,6 +107,44 @@ def set_subscription(platform, recipient_id, active):
             (platform, str(recipient_id), int(active), now, now),
         )
     log.info("SUBSCRIPTION platform=%s recipient=%s active=%s", platform, recipient_id, str(active).lower())
+
+
+def set_meeting_subscription(meeting_id, platform, recipient_id, active=True):
+    now = int(time.time())
+    with db_connect() as db:
+        db.execute(
+            """INSERT INTO meeting_subscriptions(meeting_id, platform, recipient_id, active, subscribed_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(meeting_id, platform, recipient_id) DO UPDATE
+               SET active=excluded.active, updated_at=excluded.updated_at""",
+            (meeting_id, platform, str(recipient_id), int(active), now, now),
+        )
+    log.info(
+        "MEETING_SUBSCRIPTION meeting=%s platform=%s recipient=%s active=%s",
+        meeting_id, platform, recipient_id, str(active).lower(),
+    )
+    if active:
+        deliver_existing_meeting(meeting_id, platform, str(recipient_id))
+
+
+def join_payload(meeting_id):
+    if not MEETING_API_TOKEN or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", meeting_id):
+        return ""
+    digest = hmac.new(MEETING_API_TOKEN.encode(), meeting_id.encode(), hashlib.sha256).digest()
+    signature = base64.urlsafe_b64encode(digest[:JOIN_SIGNATURE_BYTES]).decode().rstrip("=")
+    return f"m_{meeting_id}_{signature}"
+
+
+def meeting_id_from_payload(payload):
+    if not re.fullmatch(r"m_[A-Za-z0-9._-]{1,240}", payload or ""):
+        return ""
+    value = payload[2:]
+    separator = len(value) - JOIN_SIGNATURE_CHARS - 1
+    if separator <= 0 or value[separator] != "_":
+        return ""
+    meeting_id = value[:separator]
+    expected = join_payload(meeting_id)
+    return meeting_id if expected and secrets.compare_digest(payload, expected) else ""
 
 
 def chunks(text, limit=3500):
@@ -156,6 +214,17 @@ def telegram_document(chat_id, filename, content):
     return result
 
 
+_telegram_username = ""
+
+
+def telegram_bot_username():
+    global _telegram_username
+    if not _telegram_username:
+        result = telegram("getMe", {})
+        _telegram_username = str((result.get("result") or {}).get("username", "")).lstrip("@")
+    return _telegram_username
+
+
 def vk(method, fields):
     if not VK_GROUP_TOKEN:
         raise RuntimeError("VK group access token is not configured")
@@ -171,6 +240,43 @@ def vk_send(peer_id, text):
         vk("messages.send", {"peer_id": peer_id, "random_id": secrets.randbelow(2_147_483_647), "message": part})
 
 
+def vk_document_attachment(peer_id, filename, content):
+    upload = vk("docs.getMessagesUploadServer", {"peer_id": peer_id, "type": "doc"}).get("response") or {}
+    upload_url = upload.get("upload_url", "")
+    if not upload_url:
+        raise RuntimeError("VK did not return a document upload URL")
+    uploaded = post_multipart(
+        upload_url, {}, "file", filename, content,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    file_token = uploaded.get("file", "")
+    if not file_token:
+        raise RuntimeError("VK document upload did not return a file token")
+    saved = vk("docs.save", {"file": file_token, "title": filename}).get("response")
+    if isinstance(saved, list):
+        document = saved[0] if saved else {}
+    elif isinstance(saved, dict) and isinstance(saved.get("doc"), dict):
+        document = saved["doc"]
+    else:
+        document = saved or {}
+    owner_id, document_id = document.get("owner_id"), document.get("id")
+    if owner_id is None or document_id is None:
+        raise RuntimeError("VK docs.save did not return a document identifier")
+    attachment = f"doc{owner_id}_{document_id}"
+    if document.get("access_key"):
+        attachment += f"_{document['access_key']}"
+    return attachment
+
+
+def vk_send_documents(peer_id, documents):
+    attachments = [vk_document_attachment(peer_id, filename, content) for filename, content in documents]
+    vk("messages.send", {
+        "peer_id": peer_id,
+        "random_id": secrets.randbelow(2_147_483_647),
+        "attachment": ",".join(attachments),
+    })
+
+
 def subscription_command(text):
     command = text.strip().lower().split(maxsplit=1)[0] if text.strip() else ""
     if "@" in command:
@@ -182,12 +288,30 @@ def subscription_command(text):
     return None
 
 
+def telegram_meeting_payload(text):
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        return ""
+    command = parts[0].lower().split("@", 1)[0]
+    return parts[1].strip() if command == "/start" else ""
+
+
 def handle_telegram(update):
     message = update.get("message") or {}
     chat_id = (message.get("chat") or {}).get("id")
     if not chat_id:
         return
-    command = subscription_command(message.get("text", ""))
+    text = message.get("text", "")
+    payload = telegram_meeting_payload(text)
+    if payload:
+        meeting_id = meeting_id_from_payload(payload)
+        if meeting_id:
+            set_meeting_subscription(meeting_id, "telegram", chat_id)
+            telegram_send(chat_id, "Вы подписаны только на документы этого собрания.")
+        else:
+            telegram_send(chat_id, "Ссылка на собрание недействительна.")
+        return
+    command = subscription_command(text)
     if command is True:
         set_subscription("telegram", chat_id, True)
         telegram_send(chat_id, "Вы подписаны на протоколы собраний. Для отмены: /unsubscribe")
@@ -217,6 +341,11 @@ def handle_vk(event):
     peer_id = message.get("peer_id") or message.get("from_id")
     if not peer_id:
         return
+    meeting_id = meeting_id_from_payload(str(message.get("ref", "")))
+    if meeting_id:
+        set_meeting_subscription(meeting_id, "vk", peer_id)
+        vk_send(peer_id, "Вы подписаны только на документы этого собрания.")
+        return
     command = subscription_command(message.get("text", ""))
     if command is True:
         set_subscription("vk", peer_id, True)
@@ -233,6 +362,105 @@ def safe_filename(value):
     return value[:100] or "Собрание"
 
 
+def meeting_page(payload):
+    meeting_id = meeting_id_from_payload(payload)
+    if not meeting_id:
+        return 404, "Ссылка на собрание недействительна."
+    try:
+        telegram_username = telegram_bot_username()
+    except Exception:
+        log.exception("TELEGRAM_USERNAME_LOOKUP_FAILED")
+        telegram_username = ""
+    vk_name = VK_GROUP_SCREEN_NAME.strip().lstrip("@") or (f"club{VK_GROUP_ID}" if VK_GROUP_ID else "")
+    telegram_url = f"https://t.me/{telegram_username}?start={urllib.parse.quote(payload)}" if telegram_username else ""
+    vk_url = (
+        f"https://vk.me/{urllib.parse.quote(vk_name)}?"
+        + urllib.parse.urlencode({"ref": payload, "ref_source": "meeting_qr"})
+        if vk_name else ""
+    )
+    buttons = []
+    if telegram_url:
+        buttons.append(f'<a class="button telegram" href="{html.escape(telegram_url, quote=True)}">Подписаться в Telegram</a>')
+    if vk_url:
+        buttons.append(f'<a class="button vk" href="{html.escape(vk_url, quote=True)}">Подписаться во ВКонтакте</a>')
+    if not buttons:
+        buttons.append('<p class="error">Ссылки на ботов пока не настроены.</p>')
+    page = f"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#14213d"><title>Подписка на собрание</title>
+<style>
+:root{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#152238;background:#eef2f7}}
+*{{box-sizing:border-box}}body{{margin:0;padding:24px 16px}}main{{max-width:520px;margin:auto;background:#fff;border-radius:20px;padding:26px;box-shadow:0 12px 35px #1e293b20}}
+h1{{margin:0 0 10px;font-size:27px}}p{{line-height:1.5;color:#526174}}.meeting{{font-family:ui-monospace,monospace;background:#f1f5f9;border-radius:10px;padding:10px 12px;word-break:break-all}}
+.button{{display:block;margin:13px 0;padding:15px 18px;border-radius:12px;color:#fff;text-decoration:none;text-align:center;font-weight:700}}.telegram{{background:#229ed9}}.vk{{background:#0077ff}}.note{{font-size:13px}}.error{{color:#b91c1c}}
+</style></head><body><main><h1>Документы собрания</h1>
+<p>Выберите бот. Подписка действует только для этого собрания: после обработки бот пришлёт протокол и транскрибацию в DOCX.</p>
+<div class="meeting">{html.escape(meeting_id)}</div>{''.join(buttons)}
+<p class="note">В Telegram нажмите «Старт». Во ВКонтакте откройте диалог и отправьте любое сообщение — метка собрания передастся боту автоматически.</p>
+</main></body></html>"""
+    return 200, page
+
+
+def document_payloads(title, transcript, summary):
+    stem = safe_filename(title)
+    return [
+        (f"{stem} - транскрибация.docx", meeting_documents.build_docx(f"{title} — транскрибация", transcript)),
+        (f"{stem} - протокол и сводка.docx", meeting_documents.build_docx(f"{title} — протокол и сводка", summary, structured=True)),
+    ]
+
+
+def claim_delivery(meeting_id, platform, recipient_id):
+    with db_connect() as db:
+        result = db.execute(
+            """INSERT INTO deliveries(meeting_id, platform, recipient_id, status, error, updated_at)
+               VALUES (?, ?, ?, 'sending', NULL, ?)
+               ON CONFLICT(meeting_id, platform, recipient_id) DO UPDATE
+               SET status='sending', error=NULL, updated_at=excluded.updated_at
+               WHERE deliveries.status='failed'""",
+            (meeting_id, platform, str(recipient_id), int(time.time())),
+        )
+        return result.rowcount == 1
+
+
+def finish_delivery(meeting_id, platform, recipient_id, status, error=None):
+    with db_connect() as db:
+        db.execute(
+            """UPDATE deliveries SET status=?, error=?, updated_at=?
+               WHERE meeting_id=? AND platform=? AND recipient_id=?""",
+            (status, error, int(time.time()), meeting_id, platform, str(recipient_id)),
+        )
+
+
+def send_document_payloads(platform, recipient_id, documents):
+    if platform == "telegram":
+        for filename, content in documents:
+            telegram_document(recipient_id, filename, content)
+    elif platform == "vk":
+        vk_send_documents(recipient_id, documents)
+    else:
+        raise RuntimeError("unknown platform")
+
+
+def deliver_existing_meeting(meeting_id, platform, recipient_id):
+    with db_connect() as db:
+        completed = db.execute(
+            "SELECT title, transcript, protocol FROM broadcasts WHERE meeting_id=?",
+            (meeting_id,),
+        ).fetchone()
+    if not completed or not completed[1] or not claim_delivery(meeting_id, platform, recipient_id):
+        return False
+    try:
+        send_document_payloads(platform, recipient_id, document_payloads(*completed))
+        finish_delivery(meeting_id, platform, recipient_id, "sent")
+        log.info("LATE_DELIVERY_FINISHED meeting=%s platform=%s recipient=%s", meeting_id, platform, recipient_id)
+        return True
+    except Exception as exc:
+        error = str(exc)[:500]
+        finish_delivery(meeting_id, platform, recipient_id, "failed", error)
+        log.error("LATE_DELIVERY_FAILED meeting=%s platform=%s recipient=%s error=%s", meeting_id, platform, recipient_id, error)
+        return False
+
+
 def broadcast(meeting_id, title, transcript, summary):
     now = int(time.time())
     with db_connect() as db:
@@ -240,38 +468,31 @@ def broadcast(meeting_id, title, transcript, summary):
         if existing:
             return {"duplicate": True, "sent": 0, "failed": 0}
         db.execute(
-            "INSERT INTO broadcasts(meeting_id, title, protocol, created_at) VALUES (?, ?, ?, ?)",
-            (meeting_id, title, summary, now),
+            "INSERT INTO broadcasts(meeting_id, title, transcript, protocol, created_at) VALUES (?, ?, ?, ?, ?)",
+            (meeting_id, title, transcript, summary, now),
         )
         recipients = db.execute(
-            "SELECT platform, recipient_id FROM subscribers WHERE active=1 ORDER BY platform, recipient_id"
+            """SELECT platform, recipient_id FROM subscribers WHERE active=1
+               UNION
+               SELECT platform, recipient_id FROM meeting_subscriptions WHERE meeting_id=? AND active=1
+               ORDER BY platform, recipient_id""",
+            (meeting_id,),
         ).fetchall()
 
-    stem = safe_filename(title)
-    transcript_docx = meeting_documents.build_docx(f"{title} — транскрибация", transcript)
-    summary_docx = meeting_documents.build_docx(f"{title} — протокол и сводка", summary, structured=True)
+    documents = document_payloads(title, transcript, summary)
     sent = failed = 0
     for platform, recipient_id in recipients:
+        if not claim_delivery(meeting_id, platform, recipient_id):
+            continue
         try:
-            if platform == "telegram":
-                telegram_document(recipient_id, f"{stem} - транскрибация.docx", transcript_docx)
-                telegram_document(recipient_id, f"{stem} - протокол и сводка.docx", summary_docx)
-                telegram_send(recipient_id, f"{title}\n\n{transcript}".strip())
-            elif platform == "vk":
-                vk_send(recipient_id, f"{title}\n\n{summary}\n\nПОЛНАЯ ТРАНСКРИБАЦИЯ\n\n{transcript}".strip())
-            else:
-                raise RuntimeError("unknown platform")
+            send_document_payloads(platform, recipient_id, documents)
             status, error = "sent", None
             sent += 1
         except Exception as exc:
             status, error = "failed", str(exc)[:500]
             failed += 1
             log.error("DELIVERY_FAILED meeting=%s platform=%s recipient=%s error=%s", meeting_id, platform, recipient_id, error)
-        with db_connect() as db:
-            db.execute(
-                "INSERT OR REPLACE INTO deliveries(meeting_id, platform, recipient_id, status, error, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (meeting_id, platform, recipient_id, status, error, int(time.time())),
-            )
+        finish_delivery(meeting_id, platform, recipient_id, status, error)
     log.info("BROADCAST_FINISHED meeting=%s sent=%d failed=%d", meeting_id, sent, failed)
     return {"duplicate": False, "sent": sent, "failed": failed}
 
@@ -293,8 +514,12 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length) or b"{}")
 
     def do_GET(self):
-        if self.path == "/health":
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/health":
             self.reply(200, json.dumps({"ok": True}), "application/json")
+        elif path.startswith("/m/"):
+            status, page = meeting_page(urllib.parse.unquote(path[3:]))
+            self.reply(status, page, "text/html; charset=utf-8" if status == 200 else "text/plain; charset=utf-8")
         else:
             self.reply(404, "not found")
 

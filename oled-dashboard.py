@@ -1,8 +1,11 @@
 #!/usr/bin/python3
 import array, fcntl, glob, json, math, os, signal, subprocess, threading, time
 import gpiod
+try:import qrcode
+except ImportError:qrcode=None
 I2C_DEV="/dev/i2c-0"; I2C_ADDR=0x3C; STATE_FILE="/run/ai-recorder-state"; LEVEL_FILE="/run/ai-recorder-audio-level"
 UPLOAD_PROGRESS_FILE="/run/user/1000/meeting-upload-progress.json"; AUTO_STOP_SECONDS=6*3600; AUTO_STOP_WARNING_SECONDS=15*60
+MEETING_DISPLAY_FILE="/run/user/1000/meeting-display.json"
 SOURCE="alsa_input.platform-inmp441-sound.stereo-fallback"
 DEFAULT_MIC_GAIN=float(os.environ.get("MIC_GAIN","4"))
 SETTINGS_FILE="/var/lib/meeting-recorder/settings.json"
@@ -29,8 +32,11 @@ class Display:
  def cmd(self,*v):
   for i in range(0,len(v),16): os.write(self.fd,bytes([0])+bytes(v[i:i+16]))
  def clear(self): self.buf[:]=b'\0'*1024
- def pixel(self,x,y):
-  if 0<=x<128 and 0<=y<64: self.buf[(y//8)*128+x]|=1<<(y&7)
+ def pixel(self,x,y,on=True):
+  if 0<=x<128 and 0<=y<64:
+   index=(y//8)*128+x;mask=1<<(y&7)
+   if on:self.buf[index]|=mask
+   else:self.buf[index]&=~mask
  def text(self,x,y,s,scale=1):
   for ch in s.upper():
    for gx,col in enumerate(FONT.get(ch,FONT["?"])):
@@ -42,6 +48,19 @@ class Display:
  def centered(self,y,s,scale=1): self.text(max(0,(128-len(s)*6*scale+scale)//2),y,s,scale)
  def line(self,x,y0,y1):
   for y in range(y0,y1+1): self.pixel(x,y)
+ def qr(self,value,x=0,y=0,max_size=64):
+  if qrcode is None:return False
+  code=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=1,border=2)
+  code.add_data(value);code.make(fit=True);matrix=code.get_matrix();modules=len(matrix)
+  scale=max(1,max_size//modules);size=modules*scale;ox=x+(max_size-size)//2;oy=y+(max_size-size)//2
+  for px in range(ox,ox+size):
+   for py in range(oy,oy+size):self.pixel(px,py,True)
+  for row,line in enumerate(matrix):
+   for column,dark in enumerate(line):
+    if dark:
+     for dx in range(scale):
+      for dy in range(scale):self.pixel(ox+column*scale+dx,oy+row*scale+dy,False)
+  return True
  def show(self):
   for p in range(8):
    self.cmd(0xB0+p,2,0x10); row=self.buf[p*128:(p+1)*128]
@@ -111,6 +130,25 @@ def requested():
   with open(STATE_FILE) as f:return f.read().strip().upper()
  except OSError:return ""
 def wifi_ok():return "wlan0:connected" in subprocess.run(["nmcli","-t","-f","DEVICE,STATE","device"],capture_output=True,text=True).stdout
+def current_ip():
+ result=subprocess.run(["ip","-4","-o","addr","show","scope","global"],capture_output=True,text=True).stdout
+ addresses=[]
+ for line in result.splitlines():
+  parts=line.split()
+  if len(parts)>=4 and parts[2]=="inet":addresses.append((parts[1],parts[3].split("/",1)[0]))
+ for interface,address in addresses:
+  if interface=="wlan0":return address
+ if addresses:return addresses[0][1]
+ return "НЕТ АДРЕСА"
+def meeting_display():
+ try:
+  with open(MEETING_DISPLAY_FILE,encoding="utf-8") as source:value=json.load(source)
+  if value.get("phase")=="stopped" and int(value.get("qr_until",0))<=int(time.time()):
+   try:os.unlink(MEETING_DISPLAY_FILE)
+   except FileNotFoundError:pass
+   return {}
+  return value if value.get("join_url") else {}
+ except (OSError,ValueError,TypeError):return {}
 def upload_pending():
  for ready in glob.glob("/home/radxa/audio-split-test/*/.ready"):
   if not os.path.exists(os.path.join(os.path.dirname(ready),".uploaded")):return True
@@ -130,7 +168,7 @@ def audio_settings():
  except (OSError,ValueError,TypeError):return DEFAULT_MIC_GAIN,-38.,-42.
 def duration(s):return f"{int(s)//3600:02}:{(int(s)//60)%60:02}:{int(s)%60:02}"
 def main():
- d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;upload_phase="";upload_percent=0;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;mic_gain,speech_db,silence_db=audio_settings()
+ d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;upload_phase="";upload_percent=0;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;ip_screen=False;ip_value="";meeting={};mic_gain,speech_db,silence_db=audio_settings()
  def stop(*_):
   nonlocal alive;alive=False
  signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
@@ -144,7 +182,7 @@ def main():
    else:
     inactive_checks+=1
     if inactive_checks>=5:active=False
-   upload=user_active("meeting-upload.service");upload_phase,upload_percent=upload_progress();pending=upload_pending();bt_active=system_active("bt-pairing-mode.service");wifi=wifi_ok();new_gain,speech_db,silence_db=audio_settings();last=now
+   upload=user_active("meeting-upload.service");upload_phase,upload_percent=upload_progress();pending=upload_pending();bt_active=system_active("bt-pairing-mode.service");wifi=wifi_ok();meeting=meeting_display();new_gain,speech_db,silence_db=audio_settings();last=now
    if new_gain!=mic_gain:
     mic_gain=new_gain
     if m.running:m.stop()
@@ -170,6 +208,8 @@ def main():
   try:state_age=time.time()-os.path.getmtime(STATE_FILE)
   except OSError:state_age=999
   if req in ("STARTING","STOPPING","ERROR"):state=req
+  elif active and meeting:state="RECORDING_QR"
+  elif not active and meeting.get("phase")=="stopped":state="MEETING_QR"
   elif req=="PROCESSING" and (upload or state_age<3):state="PROCESSING"
   elif active and started and AUTO_STOP_SECONDS-(now-started)<=AUTO_STOP_WARNING_SECONDS:state="AUTO_STOP_WARNING"
   elif active:state="SILENCE" if silent else "SPEECH"
@@ -177,12 +217,13 @@ def main():
   elif pending:state="PROCESSING" if wifi else "WAIT_NETWORK"
   elif bt_active:state="BT_CONNECTED" if os.path.exists("/run/bt-client-connected") else "BT_PAIRING"
   else:state="READY"
-  if state not in ("READY","MENU","SHUTDOWN_CONFIRM"):
-   menu=False;shutdown_confirm=False
+  if state not in ("READY","MENU","SHUTDOWN_CONFIRM","IP_ADDRESS"):
+   menu=False;shutdown_confirm=False;ip_screen=False
   for event in controls.poll():
    if event=="KNOB" and state=="READY" and not menu:menu=True;menu_index=0
    elif event in ("LEFT","RIGHT") and menu:
-    menu_index=(menu_index+(-1 if event=="LEFT" else 1))%3
+    menu_index=(menu_index+(-1 if event=="LEFT" else 1))%4
+   elif event=="BACK" and ip_screen:ip_screen=False;state="READY"
    elif event=="BACK" and shutdown_confirm:shutdown_confirm=False;state="READY"
    elif event=="BACK" and menu:menu=False
    elif event=="BACK" and bt_active:
@@ -194,15 +235,28 @@ def main():
     if menu_index==0:
      subprocess.run(["systemctl","restart","bt-pairing-mode.service"],check=False);bt_active=True;menu=False;state="BT_PAIRING"
     elif menu_index==1:
+     ip_value=current_ip();menu=False;ip_screen=True;state="IP_ADDRESS"
+    elif menu_index==2:
      menu=False;shutdown_confirm=True;state="SHUTDOWN_CONFIRM"
     else:menu=False
+   elif event in ("KNOB","CONFIRM") and ip_screen:ip_screen=False;state="READY"
    elif event in ("KNOB","CONFIRM") and shutdown_confirm:
     d.clear();d.centered(16,"ВЫКЛЮЧЕНИЕ",2);d.centered(42,"ПОДОЖДИТЕ");d.show()
     subprocess.Popen(["systemctl","poweroff"])
     shutdown_confirm=False
   if shutdown_confirm:state="SHUTDOWN_CONFIRM"
+  elif ip_screen:state="IP_ADDRESS"
   elif menu:state="MENU"
   d.clear()
+  if state in ("RECORDING_QR","MEETING_QR"):
+   if not d.qr(meeting.get("join_url",""),0,0,64):
+    d.centered(17,"QR ОШИБКА");d.centered(34,"НЕТ МОДУЛЯ");d.centered(50,"PYTHON3-QRCODE")
+   elif state=="RECORDING_QR":
+    d.text(69,1,"ЗАПИСЬ");d.text(69,15,duration(now-started));d.text(69,31,"ДЕРЖАТЬ");d.text(69,43,"1.5 С");d.text(69,55,"СТОП")
+   else:
+    remaining=max(0,int(meeting.get("qr_until",0)-time.time()))
+    d.text(69,1,"ГОТОВО");d.text(69,15,f"QR {remaining//60}:{remaining%60:02}");d.text(69,31,"НАЖАТЬ");d.text(69,43,"КНОПКУ");d.text(69,55,"УБРАТЬ")
+   d.show();time.sleep(.15);continue
   if state!="READY":
    for x in range(3,8):
     for y in range(2,7):
@@ -213,7 +267,9 @@ def main():
   if state=="READY":
    d.centered(18,"ГОТОВ",2);d.centered(39,"НАЖМИТЕ КНОПКУ");d.text(1,56,"МИК ОК");d.text(80,56,"СЕТЬ ОК" if wifi else "СЕТЬ НЕТ")
   elif state=="MENU":
-   d.centered(8,"МЕНЮ",2);d.text(5,31,(">" if menu_index==0 else " ")+" BT СОПРЯЖЕНИЕ");d.text(5,44,(">" if menu_index==1 else " ")+" ВЫКЛЮЧИТЬ");d.text(5,57,(">" if menu_index==2 else " ")+" НАЗАД")
+   d.centered(1,"МЕНЮ",2);d.text(5,23,(">" if menu_index==0 else " ")+" BT СОПРЯЖЕНИЕ");d.text(5,35,(">" if menu_index==1 else " ")+" IP АДРЕС");d.text(5,47,(">" if menu_index==2 else " ")+" ВЫКЛЮЧИТЬ");d.text(5,57,(">" if menu_index==3 else " ")+" НАЗАД")
+  elif state=="IP_ADDRESS":
+   d.centered(8,"IP АДРЕС");d.centered(27,ip_value,1);d.centered(51,"OK ИЛИ BACK")
   elif state=="SHUTDOWN_CONFIRM":
    d.centered(13,"ВЫКЛЮЧИТЬ?",2);d.centered(39,"OK - ДА");d.centered(54,"BACK - НЕТ")
   elif state=="BT_PAIRING":

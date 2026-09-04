@@ -20,7 +20,7 @@ fi
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ffmpeg sox curl device-tree-compiler i2c-tools gpiod python3-libgpiod \
+    ffmpeg sox curl device-tree-compiler i2c-tools gpiod python3-libgpiod python3-qrcode \
     python3-dbus python3-gi bluez network-manager pipewire pipewire-pulse wireplumber
 
 install -d -m 0755 /usr/local/sbin /var/lib/meeting-recorder
