@@ -59,6 +59,16 @@ class DeviceUiTests(unittest.TestCase):
         self.assertIn("%", self.dashboard.FONT)
         self.assertNotEqual(self.dashboard.FONT["%"], self.dashboard.FONT["?"])
 
+    def test_qr_countdown_is_available_during_stop_transition(self):
+        self.assertEqual(
+            self.dashboard.meeting_qr_remaining({"phase": "recording", "qr_until": 0}, now=100),
+            300,
+        )
+        self.assertEqual(
+            self.dashboard.meeting_qr_remaining({"phase": "stopped", "qr_until": 380}, now=100),
+            280,
+        )
+
     def test_dismissed_qr_stays_hidden_when_recording_exit_rewrites_state(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "meeting-display.json"

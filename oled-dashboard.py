@@ -183,6 +183,9 @@ def duration(s):return f"{int(s)//3600:02}:{(int(s)//60)%60:02}:{int(s)%60:02}"
 def meter_percent(db,floor_db,ceiling_db=-6.):
  if ceiling_db<=floor_db:return 0
  return max(0,min(100,int((db-floor_db)*100/(ceiling_db-floor_db))))
+def meeting_qr_remaining(meeting,now=None):
+ if meeting.get("phase")!="stopped":return 300
+ return max(0,int(meeting.get("qr_until",0)-(time.time() if now is None else now)))
 def main():
  d=Display();m=Meter();controls=Controls();alive=True;active=upload=pending=wifi=bt_active=False;upload_phase="";upload_percent=0;started=0.;silence=None;speech=False;hist=[0]*20;last=0;inactive_checks=0;menu=False;menu_index=0;shutdown_confirm=False;ip_screen=False;ip_value="";meeting={};vu_level=0.;mic_gain,speech_db,silence_db=audio_settings()
  def stop(*_):
@@ -219,6 +222,9 @@ def main():
    silent=not speech;hist=(hist+[max(0,min(15,int((db+60)/4)))])[-20:]
   else:silent=False
   req=requested()
+  # The recorder writes the stopped QR state while systemd is stopping it.
+  # Refresh this small file every frame so PROCESSING cannot flash first.
+  meeting=meeting_display()
   # STOPPING/PROCESSING comes directly from the button controller and is
   # authoritative: discard the delayed systemd "active" cache immediately.
   if req in ("STOPPING","PROCESSING"):
@@ -228,7 +234,7 @@ def main():
   except OSError:state_age=999
   if req in ("STARTING","STOPPING","ERROR"):state=req
   elif active and meeting:state="RECORDING_QR"
-  elif not active and meeting.get("phase")=="stopped":state="MEETING_QR"
+  elif not active and meeting:state="MEETING_QR"
   elif req=="PROCESSING" and (upload or state_age<3):state="PROCESSING"
   elif active and started and AUTO_STOP_SECONDS-(now-started)<=AUTO_STOP_WARNING_SECONDS:state="AUTO_STOP_WARNING"
   elif active:state="SILENCE" if silent else "SPEECH"
@@ -276,7 +282,7 @@ def main():
     if vu_level>=1:d.line(72,30,72+int(52*vu_level/100),30);d.line(72,31,72+int(52*vu_level/100),31)
     d.text(84,48,f"{int(vu_level):d}%")
    else:
-    remaining=max(0,int(meeting.get("qr_until",0)-time.time()))
+    remaining=meeting_qr_remaining(meeting)
     d.text(69,1,"ГОТОВО");d.text(69,15,f"QR {remaining//60}:{remaining%60:02}");d.text(69,31,"НАЖАТЬ");d.text(69,43,"КНОПКУ");d.text(69,55,"УБРАТЬ")
    d.show();time.sleep(.15);continue
   if state!="READY":
